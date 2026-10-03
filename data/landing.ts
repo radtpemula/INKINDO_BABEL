@@ -36,6 +36,15 @@ export interface PartnerItem {
   category?: string;
 }
 
+export interface StatisticItem {
+  id: string;
+  value: number;
+  suffix: string;
+  label: string;
+  description: string;
+  iconName: "Building2" | "Calendar" | "Award" | "CheckCircle2";
+}
+
 export const topBarData = {
   phone: "(0717) 910-1234",
   email: "sekretariat@inkindo-babel.org",
@@ -45,10 +54,10 @@ export const topBarData = {
 
 export const navigationLinks: NavItem[] = [
   { label: "Beranda", href: "#hero", iconName: "Home" },
-  { label: "Tentang Kami", href: "#about", iconName: "Building2" },
   { label: "Keanggotaan", href: "#membership-steps", iconName: "Users" },
-  { label: "Layanan", href: "#sbu-steps", iconName: "BriefcaseBusiness" },
+  { label: "Tentang Kami", href: "#about", iconName: "Building2" },
   { label: "Berita", href: "#news", iconName: "Newspaper" },
+  { label: "Layanan", href: "#sbu-steps", iconName: "BriefcaseBusiness" },
   { label: "Kontak", href: "#footer", iconName: "Phone" },
 ];
 
@@ -63,6 +72,41 @@ export const heroData = {
   searchPlaceholder: "Masukkan No. Anggota / Nama Perusahaan Konsultan...",
   searchButtonText: "Cek Status",
 };
+
+export const statisticsData: StatisticItem[] = [
+  {
+    id: "members",
+    value: 120,
+    suffix: "+",
+    label: "Badan Usaha Anggota",
+    description: "Perusahaan jasa konsultansi resmi terdaftar di Bangka Belitung",
+    iconName: "Building2",
+  },
+  {
+    id: "experience",
+    value: 20,
+    suffix: "+",
+    label: "Tahun Dedikasi",
+    description: "Mengawal pembangunan infrastruktur Serumpun Sebalai",
+    iconName: "Calendar",
+  },
+  {
+    id: "experts",
+    value: 650,
+    suffix: "+",
+    label: "Tenaga Ahli Tersertifikasi",
+    description: "Insinyur & konsultan profesional lintas disiplin ilmu",
+    iconName: "Award",
+  },
+  {
+    id: "digital",
+    value: 100,
+    suffix: "%",
+    label: "Layanan Digital Terintegrasi",
+    description: "Registrasi, verifikasi KTA, dan administrasi SBU online",
+    iconName: "CheckCircle2",
+  },
+];
 
 export const membershipSteps: StepItem[] = [
   {

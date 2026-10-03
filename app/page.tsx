@@ -1,5 +1,6 @@
 import Header from "@/components/Header";
 import Hero from "@/components/Hero";
+import StatisticsSection from "@/components/StatisticsSection";
 import MembershipSteps from "@/components/MembershipSteps";
 import AboutSection from "@/components/AboutSection";
 import RenewalSteps from "@/components/RenewalSteps";
@@ -16,6 +17,7 @@ export default function Home() {
       <Header />
       <main className="flex-grow">
         <Hero />
+        <StatisticsSection />
         <MembershipSteps />
         <AboutSection />
         <RenewalSteps />
