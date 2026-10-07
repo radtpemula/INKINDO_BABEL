@@ -1,7 +1,13 @@
+export interface SubNavItem {
+  label: string;
+  href: string;
+}
+
 export interface NavItem {
   label: string;
   href: string;
-  iconName?: "Home" | "Building2" | "Users" | "BriefcaseBusiness" | "Newspaper" | "Phone" | "Briefcase";
+  iconName?: "House" | "Building2" | "Scale" | "Newspaper" | "Gavel" | "Users" | "Handshake" | "CircleHelp" | "Phone" | "Home" | "HelpCircle";
+  subItems?: SubNavItem[];
 }
 
 export interface StepItem {
@@ -53,12 +59,87 @@ export const topBarData = {
 };
 
 export const navigationLinks: NavItem[] = [
-  { label: "Beranda", href: "#hero", iconName: "Home" },
-  { label: "Keanggotaan", href: "#membership-steps", iconName: "Users" },
-  { label: "Tentang Kami", href: "#about", iconName: "Building2" },
-  { label: "Berita", href: "#news", iconName: "Newspaper" },
-  { label: "Layanan", href: "#sbu-steps", iconName: "BriefcaseBusiness" },
-  { label: "Kontak", href: "#footer", iconName: "Phone" },
+  {
+    label: "Beranda",
+    href: "/",
+    iconName: "House",
+  },
+  {
+    label: "Tentang Kami",
+    href: "/tentang-kami/profil",
+    iconName: "Building2",
+    subItems: [
+      { label: "Profil INKINDO", href: "/tentang-kami/profil" },
+      { label: "Visi & Misi", href: "/tentang-kami/visi-misi" },
+      { label: "Struktur Organisasi", href: "/tentang-kami/struktur-organisasi" },
+    ],
+  },
+  {
+    label: "Regulasi",
+    href: "/regulasi/inkindo",
+    iconName: "Scale",
+    subItems: [
+      { label: "Regulasi INKINDO", href: "/regulasi/inkindo" },
+      { label: "Regulasi Jasa Konsultansi", href: "/regulasi/jasa-konsultansi" },
+      { label: "Regulasi Terkait", href: "/regulasi/terkait" },
+    ],
+  },
+  {
+    label: "Berita & Informasi",
+    href: "/berita-informasi/agenda-kegiatan",
+    iconName: "Newspaper",
+    subItems: [
+      { label: "Agenda Kegiatan", href: "/berita-informasi/agenda-kegiatan" },
+      { label: "Rilis Berita", href: "/berita-informasi/rilis-berita" },
+      { label: "Live Streaming", href: "/berita-informasi/live-streaming" },
+      { label: "Publikasi", href: "/berita-informasi/publikasi" },
+      { label: "Galeri", href: "/berita-informasi/galeri" },
+      { label: "e-Magazine", href: "/berita-informasi/e-magazine" },
+      { label: "Digital Library", href: "/berita-informasi/digital-library" },
+      { label: "Karya Anggota", href: "/berita-informasi/karya-anggota" },
+      { label: "DPN INKINDO", href: "/berita-informasi/dpn-inkindo" },
+    ],
+  },
+  {
+    label: "Info Lelang",
+    href: "/info-lelang/lkpp",
+    iconName: "Gavel",
+    subItems: [
+      { label: "LKPP", href: "/info-lelang/lkpp" },
+      { label: "Lainnya", href: "/info-lelang/lainnya" },
+    ],
+  },
+  {
+    label: "Anggota",
+    href: "/anggota/pendaftaran",
+    iconName: "Users",
+    subItems: [
+      { label: "Pendaftaran Anggota Baru", href: "/anggota/pendaftaran" },
+      { label: "Perpanjangan Anggota", href: "/anggota/perpanjangan" },
+      { label: "Anggota Terdaftar", href: "/anggota/terdaftar" },
+    ],
+  },
+  {
+    label: "Mitra Kerja",
+    href: "/mitra-kerja/ketentuan",
+    iconName: "Handshake",
+    subItems: [
+      { label: "Ketentuan Mitra Kerja", href: "/mitra-kerja/ketentuan" },
+      { label: "Daftar Mitra Kerja", href: "/mitra-kerja/daftar" },
+      { label: "Mitra Kerja Terdaftar", href: "/mitra-kerja/terdaftar" },
+      { label: "Login Mitra Kerja", href: "/mitra-kerja/login" },
+    ],
+  },
+  {
+    label: "Klinik Konsultasi",
+    href: "/klinik-konsultasi",
+    iconName: "CircleHelp",
+  },
+  {
+    label: "Hubungi Kami",
+    href: "/hubungi-kami",
+    iconName: "Phone",
+  },
 ];
 
 export const heroData = {
