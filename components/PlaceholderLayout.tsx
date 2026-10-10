@@ -27,11 +27,11 @@ export default function PlaceholderLayout({
     <div className="flex flex-col min-h-screen bg-white">
       <Header />
       <main className="flex-grow">
-        {/* Banner header section */}
-        <section className="bg-gradient-to-r from-[#153448] to-[#1e4a64] text-white py-12 sm:py-16 border-b border-[#24735A]/30">
+        {/* Compact internal page header / section divider */}
+        <section className="bg-[#0F172A] text-white py-6 sm:py-8 border-b border-slate-800">
           <div className="max-w-6xl mx-auto px-4 sm:px-6">
-            <nav aria-label="Breadcrumb" className="mb-4">
-              <ol className="flex flex-wrap items-center gap-2 text-xs sm:text-sm text-gray-300">
+            <nav aria-label="Breadcrumb" className="mb-2.5">
+              <ol className="flex flex-wrap items-center gap-1.5 text-xs text-slate-300">
                 <li>
                   <Link
                     href="/"
@@ -41,8 +41,8 @@ export default function PlaceholderLayout({
                   </Link>
                 </li>
                 {breadcrumbs.map((crumb, idx) => (
-                  <li key={idx} className="flex items-center gap-2">
-                    <ChevronRight className="w-3.5 h-3.5 text-[#D6A84F]" aria-hidden="true" />
+                  <li key={idx} className="flex items-center gap-1.5">
+                    <ChevronRight className="w-3.5 h-3.5 text-[#D97706]" aria-hidden="true" />
                     {crumb.href ? (
                       <Link
                         href={crumb.href}
@@ -58,41 +58,42 @@ export default function PlaceholderLayout({
               </ol>
             </nav>
 
-            {category && (
-              <span className="inline-block px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider bg-[#24735A]/60 text-[#D6A84F] border border-[#D6A84F]/30 mb-3">
-                {category}
-              </span>
-            )}
-
-            <h1 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-white tracking-tight">
-              {title}
-            </h1>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+              {category && (
+                <span className="inline-block px-2.5 py-0.5 rounded text-[11px] font-semibold uppercase tracking-wider bg-slate-800 text-[#D97706] border border-slate-700">
+                  {category}
+                </span>
+              )}
+              <h1 className="text-xl sm:text-2xl md:text-[28px] font-bold text-white tracking-tight leading-tight">
+                {title}
+              </h1>
+            </div>
           </div>
         </section>
 
         {/* Content body */}
-        <section className="py-12 sm:py-16 bg-[#F6F8F7]">
+        <section className="py-12 sm:py-16 bg-[#F8FAFC]">
           <div className="max-w-6xl mx-auto px-4 sm:px-6">
-            <div className="bg-white rounded-xl p-8 sm:p-12 border border-gray-200/80 shadow-xs">
-              <h2 className="text-xl sm:text-2xl font-bold text-[#153448] mb-4">
+            <div className="bg-white rounded-xl p-8 sm:p-12 border border-[#E2E8F0] shadow-xs">
+              <h2 className="text-xl sm:text-2xl font-bold text-[#0F172A] mb-4">
                 Halaman {title}
               </h2>
-              <p className="text-base text-gray-600 mb-8 leading-relaxed max-w-2xl">
+              <p className="text-base text-[#64748B] mb-8 leading-relaxed max-w-2xl">
                 {description}
               </p>
 
               {children}
 
-              <div className="pt-6 border-t border-gray-100 flex flex-wrap gap-4 items-center justify-between">
+              <div className="pt-6 border-t border-[#E2E8F0] flex flex-wrap gap-4 items-center justify-between">
                 <Link
                   href="/"
-                  className="inline-flex items-center gap-2 text-sm font-semibold text-[#153448] hover:text-[#24735A] transition-colors focus:outline-hidden focus-visible:underline"
+                  className="inline-flex items-center gap-2 text-sm font-semibold text-[#0F172A] hover:text-[#D97706] transition-colors focus:outline-hidden focus-visible:underline"
                 >
-                  <ArrowLeft className="w-4 h-4" aria-hidden="true" />
+                  <ArrowLeft className="w-4 h-4 text-[#D97706]" aria-hidden="true" />
                   <span>Kembali ke Beranda</span>
                 </Link>
 
-                <span className="text-xs text-gray-400">
+                <span className="text-xs text-slate-400">
                   DPP INKINDO Provinsi Kepulauan Bangka Belitung
                 </span>
               </div>

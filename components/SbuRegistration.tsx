@@ -9,7 +9,7 @@ export default function SbuRegistration() {
       title="Langkah-Langkah Pendaftaran SBU"
       description="Mekanisme pengajuan Sertifikat Badan Usaha (SBU) Jasa Konsultansi Konstruksi yang terintegrasi dengan Lembaga Sertifikasi Badan Usaha (LSBU) dan LPJK PUPR."
       steps={sbuSteps}
-      backgroundClass="bg-[#F6F8F7]"
+      backgroundClass="bg-[#F8FAFC]"
       ctaText="Konsultasi Persyaratan SBU Konstruksi"
       ctaHref="#hero"
     />

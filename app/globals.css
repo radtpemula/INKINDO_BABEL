@@ -1,19 +1,31 @@
 @import "tailwindcss";
 
 @theme {
-  --color-navy: #153448;
-  --color-navy-dark: #0f2534;
-  --color-navy-light: #1e4560;
-  --color-navy-card: #183c54;
-  --color-green: #24735A;
-  --color-green-hover: #1c5b47;
-  --color-green-light: #EAF5EF;
-  --color-gold: #D6A84F;
-  --color-gold-hover: #c4963f;
-  --color-bg-light: #F6F8F7;
-  --color-gray-border: #E5E7EB;
-  --color-text-main: #1F2933;
-  --color-muted-text: #52606D;
+  --color-slate-dark: #0F172A;
+  --color-slate-primary: #1E293B;
+  --color-slate-muted: #334155;
+  --color-surface: #FFFFFF;
+  --color-surface-subtle: #F8FAFC;
+  --color-accent: #D97706;
+  --color-accent-hover: #B45309;
+  --color-accent-subtle: #FEF3C7;
+  --color-border-main: #E2E8F0;
+  --color-border-dark: #334155;
+  --color-text-main: #1E293B;
+  --color-text-muted: #64748B;
+  --color-text-subtle: #94A3B8;
+
+  --color-navy: #1E293B;
+  --color-navy-dark: #0F172A;
+  --color-navy-light: #334155;
+  --color-navy-card: #1E293B;
+  --color-green: #D97706;
+  --color-green-hover: #B45309;
+  --color-green-light: #F8FAFC;
+  --color-gold: #D97706;
+  --color-gold-hover: #B45309;
+  --color-bg-light: #F8FAFC;
+  --color-gray-border: #E2E8F0;
 }
 
 :root {
