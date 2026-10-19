@@ -70,7 +70,6 @@ export const navigationLinks: NavItem[] = [
     iconName: "Building2",
     subItems: [
       { label: "Profil INKINDO", href: "/tentang-kami/profil" },
-      { label: "Visi & Misi", href: "/tentang-kami/visi-misi" },
       { label: "Struktur Organisasi", href: "/tentang-kami/struktur-organisasi" },
     ],
   },

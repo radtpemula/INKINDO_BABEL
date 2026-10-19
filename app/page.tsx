@@ -10,13 +10,23 @@ import SbuRegistration from "@/components/SbuRegistration";
 import MemberWorks from "@/components/MemberWorks";
 import Footer from "@/components/Footer";
 import { mainPartners, additionalPartners } from "@/data/landing";
+import { getActiveHeroSlides, getHeroSettings } from "@/lib/public/hero";
+import { getPublicLatestNews } from "@/lib/public/news";
 
-export default function Home() {
+export const dynamic = "force-dynamic";
+
+export default async function Home() {
+  const [heroSlides, heroSettings, latestNews] = await Promise.all([
+    getActiveHeroSlides(),
+    getHeroSettings(),
+    getPublicLatestNews(6),
+  ]);
+
   return (
     <div className="flex flex-col min-h-screen bg-white">
       <Header />
       <main className="flex-grow">
-        <Hero />
+        <Hero slides={heroSlides} settings={heroSettings} />
         <StatisticsSection />
         <MembershipSteps />
         <AboutSection />
@@ -28,7 +38,7 @@ export default function Home() {
           partners={mainPartners}
           bgColor="gray"
         />
-        <NewsSection />
+        <NewsSection initialArticles={latestNews} />
         <SbuRegistration />
         <MemberWorks />
         <Partners

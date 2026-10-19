@@ -1,0 +1,115 @@
+// prisma/schema.prisma
+// Prisma Schema for INKINDO BABEL Admin Foundation
+// Engine: SQLite for local development (easily migratable to PostgreSQL)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// 1. AdminUser - Model administrator untuk autentikasi (Tahap 2)
+model AdminUser {
+  id           String    @id @default(cuid())
+  username     String    @unique
+  email        String    @unique
+  passwordHash String
+  name         String
+  role         String    @default("ADMIN") // SUPER_ADMIN, ADMIN, EDITOR
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+// 2. SiteSetting - Pengaturan identitas website, logo, kontak, header & footer
+model SiteSetting {
+  id        String   @id @default(cuid())
+  group     String   // general, topbar, contact, footer, seo
+  key       String   @unique
+  value     String   // Plain text or JSON payload string
+  label     String   // Label deskriptif untuk form admin
+  type      String   @default("text") // text, textarea, json, image_url, boolean
+  updatedAt DateTime @updatedAt
+
+  @@index([group])
+}
+
+// 3. NavigationItem - Menu dan submenu hierarkis
+model NavigationItem {
+  id        String           @id @default(cuid())
+  title     String
+  path      String           // Rute tujuan internal atau URL eksternal
+  iconName  String?          // Nama ikon Lucide (House, Building2, dsb)
+  target    String           @default("_self") // _self, _blank
+  sortOrder Int              @default(0)
+  isActive  Boolean          @default(true)
+  
+  // Relasi Hierarki (Self-relation untuk submenu)
+  parentId  String?
+  parent    NavigationItem?  @relation("NavHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children  NavigationItem[] @relation("NavHierarchy")
+
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  @@index([parentId, sortOrder])
+}
+
+// 4. HomeSection - Kontrol urutan dan visibilitas section beranda
+model HomeSection {
+  id         String   @id @default(cuid())
+  key        String   @unique // hero, statistics, membership_steps, about, renewal_steps, partners_1, news, sbu_steps, member_works, partners_2
+  name       String   // Nama label yang mudah dipahami admin
+  title      String?  // Judul section yang dapat di-override
+  subtitle   String?  // Subjudul section
+  sortOrder  Int      @default(0)
+  isVisible  Boolean  @default(true)
+  customData String?  // JSON string untuk payload spesifik section (opsional)
+  updatedAt  DateTime @updatedAt
+
+  @@index([sortOrder])
+}
+
+// 5. HeroSlide - Slide gambar dan informasi untuk banner utama beranda
+model HeroSlide {
+  id          String   @id @default(cuid())
+  title       String
+  description String
+  imagePath   String
+  imageAlt    String
+  linkUrl     String?
+  linkLabel   String?
+  order       Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([order, isActive])
+}
+
+// 6. NewsArticle - Model berita dan publikasi organisasi
+model NewsArticle {
+  id             String    @id @default(cuid())
+  title          String
+  slug           String    @unique
+  category       String
+  excerpt        String
+  content        String
+  coverImagePath String?
+  coverImageAlt  String?
+  authorName     String    @default("Sekretariat INKINDO BABEL")
+  readTime       String?
+  isPublished    Boolean   @default(false)
+  publishedAt    DateTime?
+  views          Int       @default(0)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([isPublished, publishedAt])
+  @@index([category, isPublished])
+}
+

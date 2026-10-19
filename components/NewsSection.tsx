@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import {
   Calendar,
   Clock,
@@ -14,18 +15,43 @@ import {
   Bookmark,
 } from "lucide-react";
 import { newsArticles } from "@/data/landing";
+import type { PublicNewsArticle } from "@/lib/public/news";
 
-export default function NewsSection() {
+interface NewsSectionProps {
+  initialArticles?: PublicNewsArticle[];
+}
+
+export default function NewsSection({ initialArticles }: NewsSectionProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("Semua");
 
+  const articles = useMemo(() => {
+    if (initialArticles && initialArticles.length > 0) {
+      return initialArticles;
+    }
+    // ponytail: fallback to landing static articles when no DB news
+    return newsArticles.map((item) => ({
+      id: item.id,
+      title: item.title,
+      slug: null,
+      category: item.category,
+      excerpt: item.description,
+      coverImagePath: null,
+      coverImageAlt: item.imagePlaceholderText,
+      authorName: "Sekretariat INKINDO BABEL",
+      readTime: item.readTime,
+      publishedAt: item.date,
+      isFallback: true,
+    }));
+  }, [initialArticles]);
+
   const categories = useMemo(() => {
-    const unique = Array.from(new Set(newsArticles.map((a) => a.category)));
+    const unique = Array.from(new Set(articles.map((a) => a.category)));
     return ["Semua", ...unique];
-  }, []);
+  }, [articles]);
 
   const filteredArticles = useMemo(() => {
-    return newsArticles.filter((article) => {
+    return articles.filter((article) => {
       const matchesCategory =
         selectedCategory === "Semua" || article.category === selectedCategory;
 
@@ -35,11 +61,11 @@ export default function NewsSection() {
       const q = searchQuery.toLowerCase();
       return (
         article.title.toLowerCase().includes(q) ||
-        article.description.toLowerCase().includes(q) ||
+        article.excerpt.toLowerCase().includes(q) ||
         article.category.toLowerCase().includes(q)
       );
     });
-  }, [searchQuery, selectedCategory]);
+  }, [articles, searchQuery, selectedCategory]);
 
   const featuredArticle = filteredArticles[0];
   const secondaryArticles = filteredArticles.slice(1);
@@ -168,74 +194,100 @@ export default function NewsSection() {
 
         {filteredArticles.length > 0 ? (
           <div className="space-y-8 sm:space-y-10">
-            {featuredArticle && (
-              <article className="group relative bg-[#F8FAFC] rounded-xl border border-[#E2E8F0] overflow-hidden hover:shadow-lg transition-all duration-300">
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-0 items-stretch">
-                  <div className="lg:col-span-7 relative min-h-[220px] sm:min-h-[300px] lg:min-h-[360px] bg-[#0F172A] flex flex-col items-center justify-center p-8 text-center overflow-hidden">
-                    <div className="absolute inset-0 opacity-10 pointer-events-none">
-                      <svg className="w-full h-full" xmlns="http://www.w3.org/2000/svg">
-                        <defs>
-                          <pattern id="featured-grid" width="32" height="32" patternUnits="userSpaceOnUse">
-                            <path d="M 32 0 L 0 0 0 32" fill="none" stroke="#FFFFFF" strokeWidth="0.75" />
-                          </pattern>
-                        </defs>
-                        <rect width="100%" height="100%" fill="url(#featured-grid)" />
-                      </svg>
-                    </div>
+            {featuredArticle && (() => {
+              const featuredHref = featuredArticle.slug
+                ? `/berita-informasi/rilis-berita/${featuredArticle.slug}`
+                : "/berita-informasi/rilis-berita";
 
-                    <div className="relative z-10 w-16 h-16 rounded-2xl bg-slate-800 text-white border border-slate-700 flex items-center justify-center mb-3 shadow-md group-hover:scale-105 transition-transform duration-300">
-                      <Newspaper className="w-8 h-8 text-[#D97706]" aria-hidden="true" />
-                    </div>
+              return (
+                <article className="group relative bg-[#F8FAFC] rounded-xl border border-[#E2E8F0] overflow-hidden hover:shadow-lg transition-all duration-300">
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-0 items-stretch">
+                    <div className="lg:col-span-7 relative min-h-[220px] sm:min-h-[300px] lg:min-h-[360px] bg-[#0F172A] flex flex-col items-center justify-center p-8 text-center overflow-hidden">
+                      {featuredArticle.coverImagePath ? (
+                        <>
+                          <Image
+                            src={featuredArticle.coverImagePath}
+                            alt={featuredArticle.coverImageAlt || featuredArticle.title}
+                            fill
+                            className="object-cover group-hover:scale-105 transition-transform duration-500"
+                            sizes="(max-width: 1024px) 100vw, 60vw"
+                          />
+                          <div className="absolute inset-0 bg-gradient-to-t from-[#0F172A]/90 via-[#0F172A]/40 to-transparent" />
+                        </>
+                      ) : (
+                        <>
+                          <div className="absolute inset-0 opacity-10 pointer-events-none">
+                            <svg className="w-full h-full" xmlns="http://www.w3.org/2000/svg">
+                              <defs>
+                                <pattern id="featured-grid" width="32" height="32" patternUnits="userSpaceOnUse">
+                                  <path d="M 32 0 L 0 0 0 32" fill="none" stroke="#FFFFFF" strokeWidth="0.75" />
+                                </pattern>
+                              </defs>
+                              <rect width="100%" height="100%" fill="url(#featured-grid)" />
+                            </svg>
+                          </div>
 
-                    <p className="relative z-10 text-xs sm:text-sm font-semibold text-slate-200 max-w-md">
-                      {featuredArticle.imagePlaceholderText}
-                    </p>
+                          <div className="relative z-10 w-16 h-16 rounded-2xl bg-slate-800 text-white border border-slate-700 flex items-center justify-center mb-3 shadow-md group-hover:scale-105 transition-transform duration-300">
+                            <Newspaper className="w-8 h-8 text-[#D97706]" aria-hidden="true" />
+                          </div>
 
-                    <div className="absolute top-4 left-4 z-10 flex items-center gap-1.5 bg-[#D97706] text-white text-[11px] font-black tracking-wider uppercase px-3 py-1 rounded-md shadow-xs">
-                      <Bookmark className="w-3 h-3 fill-current" aria-hidden="true" />
-                      <span>ARTIKEL UTAMA</span>
-                    </div>
+                          <p className="relative z-10 text-xs sm:text-sm font-semibold text-slate-200 max-w-md">
+                            {featuredArticle.coverImageAlt || "Dokumentasi Publikasi INKINDO BABEL"}
+                          </p>
+                        </>
+                      )}
 
-                    <div className="absolute bottom-4 left-4 z-10 bg-slate-900/80 backdrop-blur-xs text-slate-300 text-[11px] px-2.5 py-1 rounded border border-slate-700">
-                      {featuredArticle.category}
-                    </div>
-                  </div>
-
-                  <div className="lg:col-span-5 p-6 sm:p-8 lg:p-10 flex flex-col justify-between bg-white">
-                    <div>
-                      <div className="flex items-center gap-4 text-xs text-[#64748B] mb-3">
-                        <span className="flex items-center gap-1.5 font-medium">
-                          <Calendar className="w-4 h-4 text-[#D97706]" aria-hidden="true" />
-                          <span>{featuredArticle.date}</span>
-                        </span>
-                        <span className="flex items-center gap-1.5">
-                          <Clock className="w-4 h-4 text-slate-400" aria-hidden="true" />
-                          <span>{featuredArticle.readTime}</span>
-                        </span>
+                      <div className="absolute top-4 left-4 z-10 flex items-center gap-1.5 bg-[#D97706] text-white text-[11px] font-black tracking-wider uppercase px-3 py-1 rounded-md shadow-xs">
+                        <Bookmark className="w-3 h-3 fill-current" aria-hidden="true" />
+                        <span>ARTIKEL UTAMA</span>
                       </div>
 
-                      <h3 className="text-xl sm:text-2xl font-black text-[#0F172A] group-hover:text-[#D97706] transition-colors leading-snug mb-4">
-                        {featuredArticle.title}
-                      </h3>
-
-                      <p className="text-xs sm:text-sm text-[#64748B] leading-relaxed line-clamp-4">
-                        {featuredArticle.description}
-                      </p>
+                      <div className="absolute bottom-4 left-4 z-10 bg-slate-900/80 backdrop-blur-xs text-slate-300 text-[11px] px-2.5 py-1 rounded border border-slate-700">
+                        {featuredArticle.category}
+                      </div>
                     </div>
 
-                    <div className="pt-6 mt-6 border-t border-[#E2E8F0] flex items-center justify-between">
-                      <span className="inline-flex items-center gap-2 text-xs sm:text-sm font-bold text-[#D97706] group-hover:text-[#B45309] transition-colors">
-                        <span>Baca Selengkapnya</span>
-                        <ChevronRight className="w-4 h-4 text-[#D97706] transition-transform duration-200 group-hover:translate-x-1" aria-hidden="true" />
-                      </span>
-                      <span className="text-[11px] font-mono text-slate-400 uppercase">
-                        DPP INKINDO BABEL
-                      </span>
+                    <div className="lg:col-span-5 p-6 sm:p-8 lg:p-10 flex flex-col justify-between bg-white">
+                      <div>
+                        <div className="flex items-center gap-4 text-xs text-[#64748B] mb-3">
+                          <span className="flex items-center gap-1.5 font-medium">
+                            <Calendar className="w-4 h-4 text-[#D97706]" aria-hidden="true" />
+                            <span>{featuredArticle.publishedAt}</span>
+                          </span>
+                          <span className="flex items-center gap-1.5">
+                            <Clock className="w-4 h-4 text-slate-400" aria-hidden="true" />
+                            <span>{featuredArticle.readTime}</span>
+                          </span>
+                        </div>
+
+                        <Link href={featuredHref} className="block group-hover:text-[#D97706] transition-colors">
+                          <h3 className="text-xl sm:text-2xl font-black text-[#0F172A] group-hover:text-[#D97706] transition-colors leading-snug mb-4">
+                            {featuredArticle.title}
+                          </h3>
+                        </Link>
+
+                        <p className="text-xs sm:text-sm text-[#64748B] leading-relaxed line-clamp-4">
+                          {featuredArticle.excerpt}
+                        </p>
+                      </div>
+
+                      <div className="pt-6 mt-6 border-t border-[#E2E8F0] flex items-center justify-between">
+                        <Link
+                          href={featuredHref}
+                          className="inline-flex items-center gap-2 text-xs sm:text-sm font-bold text-[#D97706] hover:text-[#B45309] transition-colors"
+                        >
+                          <span>Baca Selengkapnya</span>
+                          <ChevronRight className="w-4 h-4 text-[#D97706] transition-transform duration-200 group-hover:translate-x-1" aria-hidden="true" />
+                        </Link>
+                        <span className="text-[11px] font-mono text-slate-400 uppercase">
+                          {featuredArticle.authorName}
+                        </span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </article>
-            )}
+                </article>
+              );
+            })()}
 
             {secondaryArticles.length > 0 && (
               <div>
@@ -249,54 +301,83 @@ export default function NewsSection() {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {secondaryArticles.map((article) => (
-                    <article
-                      key={article.id}
-                      className="group bg-white rounded-lg border border-[#E2E8F0] overflow-hidden flex flex-col justify-between hover:shadow-md hover:-translate-y-0.5 transition-all duration-200"
-                    >
-                      <div className="h-40 bg-[#F8FAFC] border-b border-[#E2E8F0] flex flex-col items-center justify-center p-5 text-center relative overflow-hidden group-hover:bg-slate-100 transition-colors">
-                        <div className="w-10 h-10 rounded-xl bg-white text-[#0F172A] flex items-center justify-center shadow-xs mb-2 border border-[#E2E8F0] group-hover:scale-105 transition-transform duration-200">
-                          <Newspaper className="w-5 h-5 text-[#D97706]" aria-hidden="true" />
-                        </div>
-                        <span className="text-xs font-medium text-[#64748B] max-w-xs line-clamp-1">
-                          {article.imagePlaceholderText}
-                        </span>
-                        <span className="absolute top-3 left-3 bg-[#0F172A] text-slate-200 text-[10px] font-bold px-2 py-0.5 rounded shadow-xs">
-                          {article.category}
-                        </span>
-                      </div>
+                  {secondaryArticles.map((article) => {
+                    const articleHref = article.slug
+                      ? `/berita-informasi/rilis-berita/${article.slug}`
+                      : "/berita-informasi/rilis-berita";
 
-                      <div className="p-5 flex-grow flex flex-col justify-between space-y-3">
-                        <div>
-                          <div className="flex items-center gap-3 text-[11px] text-[#64748B] mb-2">
-                            <span className="flex items-center gap-1">
-                              <Calendar className="w-3.5 h-3.5 text-[#D97706]" aria-hidden="true" />
-                              <span>{article.date}</span>
-                            </span>
-                            <span className="flex items-center gap-1">
-                              <Clock className="w-3.5 h-3.5 text-slate-400" aria-hidden="true" />
-                              <span>{article.readTime}</span>
-                            </span>
-                          </div>
-
-                          <h3 className="text-sm sm:text-base font-bold text-[#0F172A] group-hover:text-[#D97706] transition-colors leading-snug line-clamp-2">
-                            {article.title}
-                          </h3>
-
-                          <p className="text-xs text-[#64748B] leading-relaxed mt-2 line-clamp-2">
-                            {article.description}
-                          </p>
-                        </div>
-
-                        <div className="pt-3 border-t border-[#E2E8F0] flex items-center justify-between">
-                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#0F172A] group-hover:text-[#D97706] transition">
-                            <span>Baca Selengkapnya</span>
-                            <ArrowRight className="w-3.5 h-3.5 text-[#D97706] transition-transform duration-200 group-hover:translate-x-0.5" aria-hidden="true" />
+                    return (
+                      <article
+                        key={article.id}
+                        className="group bg-white rounded-lg border border-[#E2E8F0] overflow-hidden flex flex-col justify-between hover:shadow-md hover:-translate-y-0.5 transition-all duration-200"
+                      >
+                        <div className="h-44 sm:h-48 bg-[#F8FAFC] border-b border-[#E2E8F0] flex flex-col items-center justify-center p-5 text-center relative overflow-hidden group-hover:bg-slate-100 transition-colors">
+                          {article.coverImagePath ? (
+                            <>
+                              <Image
+                                src={article.coverImagePath}
+                                alt={article.coverImageAlt || article.title}
+                                fill
+                                className="object-cover group-hover:scale-105 transition-transform duration-500"
+                                sizes="(max-width: 768px) 100vw, 50vw"
+                              />
+                              <div className="absolute inset-0 bg-gradient-to-t from-[#0F172A]/80 via-transparent to-transparent" />
+                            </>
+                          ) : (
+                            <>
+                              <div className="w-10 h-10 rounded-xl bg-white text-[#0F172A] flex items-center justify-center shadow-xs mb-2 border border-[#E2E8F0] group-hover:scale-105 transition-transform duration-200">
+                                <Newspaper className="w-5 h-5 text-[#D97706]" aria-hidden="true" />
+                              </div>
+                              <span className="text-xs font-medium text-[#64748B] max-w-xs line-clamp-1">
+                                {article.coverImageAlt || "Dokumentasi Publikasi"}
+                              </span>
+                            </>
+                          )}
+                          <span className="absolute top-3 left-3 z-10 bg-[#0F172A] text-slate-200 text-[10px] font-bold px-2 py-0.5 rounded shadow-xs">
+                            {article.category}
                           </span>
                         </div>
-                      </div>
-                    </article>
-                  ))}
+
+                        <div className="p-5 flex-grow flex flex-col justify-between space-y-3">
+                          <div>
+                            <div className="flex items-center gap-3 text-[11px] text-[#64748B] mb-2">
+                              <span className="flex items-center gap-1">
+                                <Calendar className="w-3.5 h-3.5 text-[#D97706]" aria-hidden="true" />
+                                <span>{article.publishedAt}</span>
+                              </span>
+                              <span className="flex items-center gap-1">
+                                <Clock className="w-3.5 h-3.5 text-slate-400" aria-hidden="true" />
+                                <span>{article.readTime}</span>
+                              </span>
+                            </div>
+
+                            <Link href={articleHref} className="block group-hover:text-[#D97706] transition-colors">
+                              <h3 className="text-sm sm:text-base font-bold text-[#0F172A] group-hover:text-[#D97706] transition-colors leading-snug line-clamp-2">
+                                {article.title}
+                              </h3>
+                            </Link>
+
+                            <p className="text-xs text-[#64748B] leading-relaxed mt-2 line-clamp-2">
+                              {article.excerpt}
+                            </p>
+                          </div>
+
+                          <div className="pt-3 border-t border-[#E2E8F0] flex items-center justify-between">
+                            <Link
+                              href={articleHref}
+                              className="inline-flex items-center gap-1 text-xs font-semibold text-[#0F172A] hover:text-[#D97706] transition"
+                            >
+                              <span>Baca Selengkapnya</span>
+                              <ArrowRight className="w-3.5 h-3.5 text-[#D97706] transition-transform duration-200 group-hover:translate-x-0.5" aria-hidden="true" />
+                            </Link>
+                            <span className="text-[10px] font-mono text-slate-400">
+                              {article.authorName}
+                            </span>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
                 </div>
               </div>
             )}
