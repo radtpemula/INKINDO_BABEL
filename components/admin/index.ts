@@ -12,3 +12,4 @@ export * from "./AdminDashboardShell";
 export * from "./HeroManagementClient";
 export * from "./HeroSettingsClient";
 export * from "./NewsManagementClient";
+export * from "./SiteSettingsClient";

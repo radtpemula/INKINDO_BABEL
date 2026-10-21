@@ -110,6 +110,7 @@ export const defaultAdminNavSections: AdminNavSection[] = [
         id: "settings",
         label: "Pengaturan Website",
         iconName: "Settings",
+        href: "/babel-and-adt/settings",
       },
       {
         id: "admins",

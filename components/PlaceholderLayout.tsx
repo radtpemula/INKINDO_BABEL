@@ -2,6 +2,7 @@ import Link from "next/link";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import { ChevronRight, ArrowLeft } from "lucide-react";
+import { getSiteSettings } from "@/lib/public/settings";
 
 interface BreadcrumbItem {
   label: string;
@@ -16,20 +17,22 @@ interface PlaceholderLayoutProps {
   children?: React.ReactNode;
 }
 
-export default function PlaceholderLayout({
+export default async function PlaceholderLayout({
   title,
   category,
   breadcrumbs,
   description = "Konten akan segera tersedia.",
   children,
 }: PlaceholderLayoutProps) {
+  const settings = await getSiteSettings();
+
   return (
     <div className="flex flex-col min-h-screen bg-white">
-      <Header />
+      <Header settings={settings} />
       <main className="flex-grow">
         {/* Compact internal page header / section divider */}
         <section className="bg-[#0F172A] text-white py-6 sm:py-8 border-b border-slate-800">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6">
+          <div className="max-w-[1280px] 2xl:max-w-[1300px] mx-auto px-4 sm:px-6 lg:px-8">
             <nav aria-label="Breadcrumb" className="mb-2.5">
               <ol className="flex flex-wrap items-center gap-1.5 text-xs text-slate-300">
                 <li>
@@ -73,7 +76,7 @@ export default function PlaceholderLayout({
 
         {/* Content body */}
         <section className="py-12 sm:py-16 bg-[#F8FAFC]">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6">
+          <div className="max-w-[1280px] 2xl:max-w-[1300px] mx-auto px-4 sm:px-6 lg:px-8">
             <div className="bg-white rounded-xl p-8 sm:p-12 border border-[#E2E8F0] shadow-xs">
               <h2 className="text-xl sm:text-2xl font-bold text-[#0F172A] mb-4">
                 Halaman {title}
@@ -94,14 +97,14 @@ export default function PlaceholderLayout({
                 </Link>
 
                 <span className="text-xs text-slate-400">
-                  DPP INKINDO Provinsi Kepulauan Bangka Belitung
+                  {settings.identity.tagline}
                 </span>
               </div>
             </div>
           </div>
         </section>
       </main>
-      <Footer />
+      <Footer settings={settings} />
     </div>
   );
 }

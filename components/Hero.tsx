@@ -263,58 +263,58 @@ export default function Hero({ slides = [], settings }: HeroProps) {
         </div>
       </div>
 
-      <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 pt-16 pb-14 md:pt-20 md:pb-16 lg:pt-24 lg:pb-20">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-12 items-center">
+      <div className="relative z-10 max-w-[1280px] 2xl:max-w-[1300px] mx-auto px-4 sm:px-6 lg:px-8 pt-10 pb-8 sm:pt-12 sm:pb-10 md:pt-14 md:pb-12 lg:pt-16 lg:pb-14 xl:pt-[70px] xl:pb-[62px]">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 xl:gap-12 items-center">
           
           <div className="lg:col-span-7 flex flex-col items-start text-left">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded bg-[#1E293B] text-slate-300 text-xs font-semibold tracking-wider uppercase mb-6 border border-slate-700">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#D97706]" aria-hidden="true" />
+            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-md bg-[#1E293B] text-slate-300 text-xs sm:text-[13px] font-semibold tracking-wider uppercase mb-4 sm:mb-4.5 border border-slate-700">
+              <span className="w-2 h-2 rounded-full bg-[#D97706]" aria-hidden="true" />
               <span>{heroContent.badge}</span>
             </div>
 
-            <h1 className="text-3xl sm:text-5xl lg:text-[52px] font-black tracking-tight leading-[1.12] text-white mb-6">
+            <h1 className="text-3xl sm:text-5xl lg:text-[52px] xl:text-[56px] 2xl:text-[58px] font-black tracking-tight leading-[1.12] text-white mb-4.5 sm:mb-5">
               {heroContent.titlePrefix}{" "}
               <span className="text-[#D97706]">{heroContent.titleAccent}</span>
             </h1>
 
-            <p className="text-base sm:text-lg text-slate-300 leading-relaxed mb-8 max-w-xl font-normal">
+            <p className="text-base sm:text-lg lg:text-[19px] xl:text-[20.5px] text-slate-300 leading-relaxed mb-6 sm:mb-7 max-w-2xl font-normal">
               {heroContent.description}
             </p>
 
-            <div className="flex flex-wrap items-center gap-3.5 sm:gap-4 mb-10 w-full sm:w-auto">
+            <div className="flex flex-wrap items-center gap-4 mb-7 sm:mb-8 w-full sm:w-auto">
               <Link
                 href={heroContent.primaryCtaHref}
-                className="group relative inline-flex items-center justify-center gap-2 bg-[#D97706] hover:bg-[#B45309] text-white text-sm font-bold tracking-wide uppercase px-6 py-3.5 rounded-md transition-all duration-200 shadow-sm active:translate-y-0 focus:outline-hidden focus:ring-2 focus:ring-[#D97706]"
+                className="group relative inline-flex items-center justify-center gap-2.5 bg-[#D97706] hover:bg-[#B45309] text-white text-sm xl:text-base font-bold tracking-wide uppercase px-7 xl:px-8 py-3.5 xl:py-4 rounded-lg h-[50px] xl:h-[54px] 2xl:h-[56px] transition-all duration-200 shadow-sm active:translate-y-0 focus:outline-hidden focus:ring-2 focus:ring-[#D97706]"
               >
                 <span>{heroContent.primaryCtaText}</span>
-                <ArrowRight className="w-4 h-4 text-white transition-transform duration-200 group-hover:translate-x-1" aria-hidden="true" />
+                <ArrowRight className="w-4.5 h-4.5 text-white transition-transform duration-200 group-hover:translate-x-1" aria-hidden="true" />
               </Link>
 
               <Link
                 href={heroContent.secondaryCtaHref}
-                className="group inline-flex items-center justify-center gap-2 bg-transparent hover:bg-slate-800 text-white text-sm font-semibold tracking-wide uppercase px-6 py-3.5 rounded-md border border-slate-600 hover:border-slate-500 transition-all duration-200 active:translate-y-0 focus:outline-hidden focus:ring-2 focus:ring-slate-400"
+                className="group inline-flex items-center justify-center gap-2 bg-transparent hover:bg-slate-800 text-white text-sm xl:text-base font-semibold tracking-wide uppercase px-6 xl:px-7 py-3.5 xl:py-4 rounded-lg h-[50px] xl:h-[54px] 2xl:h-[56px] border border-slate-600 hover:border-slate-500 transition-all duration-200 active:translate-y-0 focus:outline-hidden focus:ring-2 focus:ring-slate-400"
               >
                 <span>{heroContent.secondaryCtaText}</span>
               </Link>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 pt-6 border-t border-slate-800 w-full text-xs text-slate-300">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-5 sm:pt-5.5 border-t border-slate-800 w-full text-xs sm:text-[13px] xl:text-sm text-slate-300 font-medium">
               <div className="flex items-center gap-2.5">
-                <ShieldCheck className="w-4 h-4 text-[#D97706] shrink-0" aria-hidden="true" />
+                <ShieldCheck className="w-4.5 h-4.5 text-[#D97706] shrink-0" aria-hidden="true" />
                 <span>{heroCards.highlight1Text}</span>
               </div>
               <div className="flex items-center gap-2.5">
-                <FileCheck2 className="w-4 h-4 text-[#D97706] shrink-0" aria-hidden="true" />
+                <FileCheck2 className="w-4.5 h-4.5 text-[#D97706] shrink-0" aria-hidden="true" />
                 <span>{heroCards.highlight2Text}</span>
               </div>
               <div className="flex items-center gap-2.5">
-                <HardHat className="w-4 h-4 text-[#D97706] shrink-0" aria-hidden="true" />
+                <HardHat className="w-4.5 h-4.5 text-[#D97706] shrink-0" aria-hidden="true" />
                 <span>{heroCards.highlight3Text}</span>
               </div>
             </div>
 
             {isMultiSlide && (
-              <div className="flex items-center gap-4 mt-6 pt-4 border-t border-slate-800/60 w-full">
+              <div className="flex items-center gap-4 mt-4 pt-3 border-t border-slate-800/60 w-full">
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
@@ -358,24 +358,24 @@ export default function Hero({ slides = [], settings }: HeroProps) {
           </div>
 
           <div className="lg:col-span-5 w-full">
-            <div className="relative mx-auto max-w-md lg:max-w-none">
-              <div className="relative rounded-xl bg-[#1E293B] p-6 sm:p-7 border border-slate-700 shadow-sm overflow-hidden">
-                <div className="flex items-center justify-between border-b border-slate-700 pb-4 mb-5">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300">
-                      <Compass className="w-4 h-4" aria-hidden="true" />
+            <div className="relative mx-auto max-w-[480px] lg:max-w-none">
+              <div className="relative rounded-2xl bg-[#1E293B] p-5 sm:p-6 xl:p-7 border border-slate-700 shadow-md overflow-hidden">
+                <div className="flex items-center justify-between border-b border-slate-700 pb-3 sm:pb-3.5 mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300">
+                      <Compass className="w-4.5 h-4.5" aria-hidden="true" />
                     </div>
                     <div>
-                      <p className="text-xs font-bold text-white uppercase tracking-wider">{heroCards.cardTitle}</p>
-                      <p className="text-[10px] text-slate-400">{heroCards.cardSubtitle}</p>
+                      <p className="text-xs sm:text-[13px] font-bold text-white uppercase tracking-wider">{heroCards.cardTitle}</p>
+                      <p className="text-[11px] sm:text-xs text-slate-400">{heroCards.cardSubtitle}</p>
                     </div>
                   </div>
-                  <span className="text-[10px] font-mono text-slate-300 bg-slate-800 border border-slate-700 px-2 py-0.5 rounded">
+                  <span className="text-[10px] sm:text-[11px] font-mono text-slate-300 bg-slate-800 border border-slate-700 px-2.5 py-1 rounded">
                     {heroCards.cardBadge}
                   </span>
                 </div>
 
-                <div className="relative h-44 sm:h-52 w-full rounded-lg bg-[#0F172A] border border-slate-800 overflow-hidden flex items-center justify-center mb-5">
+                <div className="relative h-52 sm:h-60 xl:h-68 w-full rounded-xl bg-[#0F172A] border border-slate-800 overflow-hidden flex items-center justify-center mb-4 sm:mb-5">
                   {heroCards.cardImagePath ? (
                     <div className="relative w-full h-full">
                       <Image
@@ -457,21 +457,21 @@ export default function Hero({ slides = [], settings }: HeroProps) {
                   )}
                 </div>
 
-                <div className="grid grid-cols-2 gap-2.5 text-left">
-                  <div className="p-2.5 rounded-lg bg-slate-800/60 border border-slate-700/80">
-                    <div className="flex items-center gap-1.5 text-slate-200 mb-0.5">
-                      <Award className="w-3.5 h-3.5 text-[#D97706]" aria-hidden="true" />
-                      <span className="text-xs font-bold">{heroCards.cardFeature1Title}</span>
+                <div className="grid grid-cols-2 gap-3 text-left">
+                  <div className="p-3 sm:p-3.5 rounded-xl bg-slate-800/60 border border-slate-700/80">
+                    <div className="flex items-center gap-2 text-slate-200 mb-1">
+                      <Award className="w-4 h-4 text-[#D97706]" aria-hidden="true" />
+                      <span className="text-xs sm:text-[13px] font-bold">{heroCards.cardFeature1Title}</span>
                     </div>
-                    <p className="text-[11px] text-slate-400">{heroCards.cardFeature1Desc}</p>
+                    <p className="text-[11px] sm:text-xs text-slate-400">{heroCards.cardFeature1Desc}</p>
                   </div>
 
-                  <div className="p-2.5 rounded-lg bg-slate-800/60 border border-slate-700/80">
-                    <div className="flex items-center gap-1.5 text-slate-200 mb-0.5">
-                      <HardHat className="w-3.5 h-3.5 text-slate-400" aria-hidden="true" />
-                      <span className="text-xs font-bold text-white">{heroCards.cardFeature2Title}</span>
+                  <div className="p-3 sm:p-3.5 rounded-xl bg-slate-800/60 border border-slate-700/80">
+                    <div className="flex items-center gap-2 text-slate-200 mb-1">
+                      <HardHat className="w-4 h-4 text-slate-400" aria-hidden="true" />
+                      <span className="text-xs sm:text-[13px] font-bold text-white">{heroCards.cardFeature2Title}</span>
                     </div>
-                    <p className="text-[11px] text-slate-400">{heroCards.cardFeature2Desc}</p>
+                    <p className="text-[11px] sm:text-xs text-slate-400">{heroCards.cardFeature2Desc}</p>
                   </div>
                 </div>
 
@@ -483,14 +483,14 @@ export default function Hero({ slides = [], settings }: HeroProps) {
         </div>
       </div>
 
-      <div className="relative z-10 w-full bg-[#1E293B] border-t border-slate-800 py-4 sm:py-5 px-4 sm:px-6">
-        <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
-          <p className="text-sm sm:text-base font-semibold text-white tracking-wide text-center md:text-left">
+      <div className="relative z-10 w-full bg-[#1E293B] border-t border-slate-800 py-5 sm:py-6 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-[1280px] 2xl:max-w-[1300px] mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
+          <p className="text-sm sm:text-base lg:text-[17px] font-semibold text-white tracking-wide text-center md:text-left">
             {heroContent.subBannerText}
           </p>
           <Link
             href={heroContent.subBannerCtaHref}
-            className="group inline-flex items-center gap-1.5 border border-[#D97706] hover:bg-[#D97706] text-white text-xs font-bold tracking-wider uppercase px-4 py-2 rounded transition-all duration-200 shrink-0"
+            className="group inline-flex items-center gap-2 border border-[#D97706] hover:bg-[#D97706] text-white text-xs sm:text-sm font-bold tracking-wider uppercase px-5 py-2.5 rounded-lg transition-all duration-200 shrink-0"
           >
             <span>{heroContent.subBannerCtaText}</span>
             <ChevronRight className="w-4 h-4 text-white transition-transform duration-200 group-hover:translate-x-0.5" aria-hidden="true" />

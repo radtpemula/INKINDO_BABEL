@@ -49,32 +49,32 @@ function StatCard({ item, isVisible }: { item: StatisticItem; isVisible: boolean
   }, [isVisible, item.value]);
 
   return (
-    <div className="group relative bg-white rounded-lg p-5 sm:p-6 border border-[#E2E8F0] shadow-xs hover:shadow-md transition-all duration-300 hover:-translate-y-0.5">
+    <div className="group relative bg-white rounded-xl p-6 sm:p-7 xl:p-8 border border-[#E2E8F0] shadow-xs hover:shadow-md transition-all duration-300 hover:-translate-y-0.5">
       {/* Top subtle highlight */}
-      <div className="absolute top-0 left-0 right-0 h-1 bg-[#1E293B] rounded-t-lg group-hover:bg-[#D97706] transition-colors" />
+      <div className="absolute top-0 left-0 right-0 h-1.5 bg-[#1E293B] rounded-t-xl group-hover:bg-[#D97706] transition-colors" />
 
-      <div className="flex items-start justify-between gap-3 mb-3">
-        <div className="w-10 h-10 rounded-md bg-[#F8FAFC] border border-[#E2E8F0] flex items-center justify-center text-[#1E293B] shrink-0 group-hover:bg-[#1E293B] group-hover:text-white transition-colors duration-300">
-          <Icon className="w-5 h-5" aria-hidden="true" />
+      <div className="flex items-start justify-between gap-3 mb-4">
+        <div className="w-12 h-12 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] flex items-center justify-center text-[#1E293B] shrink-0 group-hover:bg-[#1E293B] group-hover:text-white transition-colors duration-300">
+          <Icon className="w-6 h-6" aria-hidden="true" />
         </div>
-        <span className="text-[11px] font-bold text-[#D97706] uppercase tracking-wider bg-[#F8FAFC] border border-[#E2E8F0] px-2 py-0.5 rounded">
+        <span className="text-[11px] sm:text-xs font-bold text-[#D97706] uppercase tracking-wider bg-[#F8FAFC] border border-[#E2E8F0] px-2.5 py-1 rounded">
           Resmi
         </span>
       </div>
 
-      <div className="flex items-baseline gap-1 text-[#0F172A] mb-1.5">
-        <span className="text-3xl sm:text-4xl font-extrabold tracking-tight tabular-nums font-mono">
+      <div className="flex items-baseline gap-1 text-[#0F172A] mb-2">
+        <span className="text-3xl sm:text-4xl xl:text-5xl font-extrabold tracking-tight tabular-nums font-mono">
           {currentValue}
         </span>
-        <span className="text-xl sm:text-2xl font-bold text-[#D97706]">
+        <span className="text-2xl sm:text-3xl font-bold text-[#D97706]">
           {item.suffix}
         </span>
       </div>
 
-      <h3 className="text-sm font-bold text-[#1E293B] leading-snug mb-1">
+      <h3 className="text-base sm:text-[17px] font-bold text-[#1E293B] leading-snug mb-1.5">
         {item.label}
       </h3>
-      <p className="text-xs text-[#64748B] leading-relaxed">
+      <p className="text-xs sm:text-[13px] text-[#64748B] leading-relaxed">
         {item.description}
       </p>
     </div>
@@ -114,11 +114,11 @@ export default function StatisticsSection() {
     <section
       ref={sectionRef}
       id="statistics"
-      className="relative z-10 w-full bg-[#F8FAFC] py-8 sm:py-12 border-b border-[#E2E8F0]"
+      className="relative z-10 w-full bg-[#F8FAFC] py-10 sm:py-14 xl:py-16 border-b border-[#E2E8F0]"
       aria-label="Statistik Utama INKINDO BABEL"
     >
-      <div className="max-w-6xl mx-auto px-4 sm:px-6">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
+      <div className="max-w-[1280px] 2xl:max-w-[1300px] mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 sm:gap-6 lg:gap-7">
           {statisticsData.map((item) => (
             <StatCard key={item.id} item={item} isVisible={hasAnimated} />
           ))}

@@ -16,6 +16,7 @@ import {
   Newspaper,
 } from "lucide-react";
 import { getPublicNewsBySlug, getRelatedNews } from "@/lib/public/news";
+import { getSiteSettings } from "@/lib/public/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -52,7 +53,10 @@ export async function generateMetadata({
 
 export default async function ArticleDetailPage({ params }: ArticleDetailPageProps) {
   const { slug } = await params;
-  const article = await getPublicNewsBySlug(slug, { incrementViews: true });
+  const [article, siteSettings] = await Promise.all([
+    getPublicNewsBySlug(slug, { incrementViews: true }),
+    getSiteSettings(),
+  ]);
 
   if (!article) {
     notFound();
@@ -68,12 +72,12 @@ export default async function ArticleDetailPage({ params }: ArticleDetailPagePro
 
   return (
     <div className="flex flex-col min-h-screen bg-white">
-      <Header />
+      <Header settings={siteSettings} />
 
       <main className="flex-grow">
         {/* Header Artikel & Breadcrumbs */}
         <section className="bg-[#0F172A] text-white py-8 sm:py-12 border-b border-slate-800">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6">
+          <div className="max-w-4xl lg:max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
             <nav aria-label="Breadcrumb" className="mb-4">
               <ol className="flex flex-wrap items-center gap-1.5 text-xs text-slate-300">
                 <li>
@@ -143,7 +147,7 @@ export default async function ArticleDetailPage({ params }: ArticleDetailPagePro
 
         {/* Konten Utama Artikel */}
         <section className="py-10 sm:py-14 bg-white">
-          <div className="max-w-4xl mx-auto px-4 sm:px-6">
+          <div className="max-w-4xl lg:max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
             <article className="space-y-8">
               {/* Gambar Sampul */}
               {article.coverImagePath ? (
@@ -298,7 +302,7 @@ export default async function ArticleDetailPage({ params }: ArticleDetailPagePro
         </section>
       </main>
 
-      <Footer />
+      <Footer settings={siteSettings} />
     </div>
   );
 }

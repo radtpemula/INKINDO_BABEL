@@ -25,6 +25,7 @@ import {
   MapPin,
 } from "lucide-react";
 import { topBarData, navigationLinks, NavItem } from "@/data/landing";
+import type { PublicSiteSettings } from "@/lib/public/settings";
 
 const navIconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   House,
@@ -41,7 +42,11 @@ const navIconMap: Record<string, React.ComponentType<{ className?: string }>> = 
   HelpCircle: CircleHelp,
 };
 
-export default function Header() {
+interface HeaderProps {
+  settings?: PublicSiteSettings;
+}
+
+export default function Header({ settings }: HeaderProps = {}) {
   const pathname = usePathname();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [logoError, setLogoError] = useState(false);
@@ -49,6 +54,12 @@ export default function Header() {
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
   const [expandedMobileMenus, setExpandedMobileMenus] = useState<Record<string, boolean>>({});
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const topbarPhone = settings?.topbar.phone ?? topBarData.phone;
+  const topbarEmail = settings?.topbar.email ?? topBarData.email;
+  const topbarLocation = settings?.topbar.location ?? "Pangkalpinang";
+  const topbarWorkingHours = settings?.topbar.workingHours ?? topBarData.workingHours;
+  const orgName = settings?.identity.orgName ?? "INKINDO BABEL";
 
   useEffect(() => {
     const handleScroll = () => {
@@ -114,63 +125,63 @@ export default function Header() {
       {/* Top bar info */}
       <div
         className={`bg-[#0F172A] text-white text-xs px-4 sm:px-6 xl:px-8 hidden md:block overflow-hidden transition-all duration-300 ${
-          isScrolled ? "max-h-0 py-0 opacity-0 pointer-events-none" : "max-h-12 py-2 opacity-100"
+          isScrolled ? "max-h-0 py-0 opacity-0 pointer-events-none" : "max-h-12 min-h-[32px] py-1.5 sm:py-2 opacity-100"
         }`}
       >
-        <div className="max-w-[1600px] mx-auto flex justify-between items-center">
-          <div className="flex items-center space-x-6">
-            <span className="flex items-center gap-1.5 text-slate-300">
+        <div className="max-w-[1420px] 2xl:max-w-[1460px] mx-auto flex justify-between items-center text-xs font-medium text-slate-300">
+          <div className="flex items-center space-x-6 sm:space-x-8">
+            <span className="flex items-center gap-2 text-slate-300">
               <Phone className="w-3.5 h-3.5 text-[#D97706] shrink-0" aria-hidden="true" />
-              <span>{topBarData.phone}</span>
+              <span>{topbarPhone}</span>
             </span>
-            <span className="flex items-center gap-1.5 text-slate-300">
+            <span className="flex items-center gap-2 text-slate-300">
               <Mail className="w-3.5 h-3.5 text-[#D97706] shrink-0" aria-hidden="true" />
-              <span>{topBarData.email}</span>
+              <span>{topbarEmail}</span>
             </span>
-            <span className="flex items-center gap-1.5 text-slate-300">
+            <span className="flex items-center gap-2 text-slate-300">
               <MapPin className="w-3.5 h-3.5 text-[#D97706] shrink-0" aria-hidden="true" />
-              <span>Pangkalpinang</span>
+              <span>{topbarLocation}</span>
             </span>
           </div>
           <div className="text-slate-400">
-            <span>{topBarData.workingHours}</span>
+            <span>{topbarWorkingHours}</span>
           </div>
         </div>
       </div>
 
       {/* Main navigation container */}
       <div
-        className={`max-w-[1600px] mx-auto px-4 sm:px-6 xl:px-8 flex items-center justify-between gap-3 xl:gap-4 2xl:gap-8 transition-all duration-300 ${
-          isScrolled ? "py-2 sm:py-2.5" : "py-2.5 sm:py-3.5"
+        className={`max-w-[1440px] 2xl:max-w-[1480px] mx-auto px-4 sm:px-5 xl:px-5 2xl:px-6 flex items-center justify-between gap-2 xl:gap-2.5 2xl:gap-4 transition-all duration-300 ${
+          isScrolled ? "py-2 sm:py-2.5 min-h-[68px]" : "py-3 sm:py-3.5 xl:py-4 min-h-[84px] xl:min-h-[90px]"
         }`}
       >
         {/* Logo */}
         <Link
           href="/"
           className="flex items-center gap-3 shrink-0 rounded-md py-1 transition-transform duration-200 hover:opacity-95 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[#D97706] focus-visible:ring-offset-2"
-          aria-label="Beranda DPP INKINDO BABEL"
+          aria-label={`Beranda DPP ${orgName}`}
         >
           {!logoError ? (
             <Image
               src="/images/logo-inkindo.png"
-              alt="Logo DPP INKINDO BABEL"
-              width={220}
-              height={46}
+              alt={`Logo DPP ${orgName}`}
+              width={260}
+              height={56}
               priority
               onError={() => setLogoError(true)}
-              className="w-auto h-10 sm:h-11 2xl:h-11.5 object-contain transition-all duration-300"
+              className="w-auto h-10 sm:h-11 lg:h-[46px] 2xl:h-[48px] object-contain transition-all duration-300"
             />
           ) : (
-            <div className="flex items-center gap-2.5">
-              <div className="w-10 h-10 rounded-lg bg-[#0F172A] flex items-center justify-center text-white font-extrabold text-base border border-[#334155] shadow-xs">
-                <span className="font-serif italic font-black text-lg">I</span>
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 lg:w-11 lg:h-11 rounded-lg bg-[#0F172A] flex items-center justify-center text-white font-extrabold text-lg border border-[#334155] shadow-xs">
+                <span className="font-serif italic font-black text-xl">I</span>
               </div>
               <div className="flex flex-col">
-                <span className="text-base sm:text-lg font-extrabold tracking-tight text-[#0F172A] leading-none">
-                  INKINDO
+                <span className="text-base sm:text-lg lg:text-xl font-extrabold tracking-tight text-[#0F172A] leading-none">
+                  {orgName.split(" ")[0] || "INKINDO"}
                 </span>
-                <span className="text-[10px] font-bold tracking-wider text-[#D97706] uppercase mt-0.5 leading-tight">
-                  BABEL
+                <span className="text-[11px] font-bold tracking-wider text-[#D97706] uppercase mt-0.5 leading-tight">
+                  {orgName.split(" ").slice(1).join(" ") || "BABEL"}
                 </span>
               </div>
             </div>
@@ -179,7 +190,7 @@ export default function Header() {
 
         {/* Desktop Navigation Links with Single-Level Dropdowns */}
         <nav
-          className="hidden xl:flex items-center gap-1 xl:gap-1.5 2xl:gap-3 select-none shrink-0"
+          className="hidden xl:flex items-center gap-0.5 xl:gap-1 2xl:gap-1.5 select-none shrink-0"
           aria-label="Navigasi Utama"
         >
           {navigationLinks.map((link) => {
@@ -199,7 +210,7 @@ export default function Header() {
                   <button
                     type="button"
                     onClick={() => setActiveDropdown(isOpen ? null : link.label)}
-                    className={`group relative flex flex-col items-center justify-center text-center px-2 2xl:px-2.5 py-1 transition-colors duration-200 rounded-md select-none caret-transparent cursor-pointer whitespace-nowrap shrink-0 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[#D97706] focus-visible:ring-offset-2 ${
+                    className={`group relative flex flex-col items-center justify-center text-center px-1.5 xl:px-2 2xl:px-2.5 py-1 transition-colors duration-200 rounded-md select-none caret-transparent cursor-pointer whitespace-nowrap shrink-0 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[#D97706] focus-visible:ring-offset-2 ${
                       isActive || isOpen
                         ? "text-[#D97706]"
                         : "text-[#1E293B] hover:text-[#D97706]"
@@ -209,7 +220,7 @@ export default function Header() {
                   >
                     {IconComponent && (
                       <IconComponent
-                        className={`w-4 h-4 2xl:w-[18px] 2xl:h-[18px] mb-1 shrink-0 pointer-events-none transition-transform duration-200 group-hover:scale-105 ${
+                        className={`w-[19px] h-[19px] 2xl:w-[20.5px] 2xl:h-[20.5px] mb-1 shrink-0 pointer-events-none transition-transform duration-200 group-hover:scale-105 ${
                           isActive || isOpen
                             ? "text-[#D97706]"
                             : "text-slate-500 group-hover:text-[#D97706]"
@@ -217,7 +228,7 @@ export default function Header() {
                         aria-hidden="true"
                       />
                     )}
-                    <span className="text-xs 2xl:text-[13px] font-medium leading-tight select-none pointer-events-none whitespace-nowrap">
+                    <span className="text-[13.5px] 2xl:text-[14px] font-medium leading-tight select-none pointer-events-none whitespace-nowrap">
                       <span className={isActive || isOpen ? "font-semibold" : ""}>
                         {link.label}
                       </span>
@@ -225,7 +236,7 @@ export default function Header() {
 
                     {/* Active underline indicator */}
                     <span
-                      className={`absolute -bottom-1 left-2 right-2 h-0.5 bg-[#D97706] rounded-full transition-all duration-300 pointer-events-none ${
+                      className={`absolute -bottom-1 left-1.5 right-1.5 h-0.5 bg-[#D97706] rounded-full transition-all duration-300 pointer-events-none ${
                         isActive
                           ? "opacity-100 scale-x-100"
                           : "opacity-0 scale-x-0 group-hover:opacity-60 group-hover:scale-x-100"
@@ -250,7 +261,7 @@ export default function Header() {
                               key={sub.label}
                               href={sub.href}
                               role="menuitem"
-                              className={`block px-3.5 py-1.5 text-xs 2xl:text-[13px] transition-colors duration-150 select-none caret-transparent cursor-pointer ${
+                              className={`block px-3.5 py-1.5 text-xs xl:text-[13px] 2xl:text-[13.5px] transition-colors duration-150 select-none caret-transparent cursor-pointer ${
                                 isSubActive
                                   ? "bg-[#F8FAFC] text-[#D97706] font-semibold"
                                   : "text-[#1E293B] hover:bg-[#F8FAFC] hover:text-[#D97706]"
@@ -272,13 +283,13 @@ export default function Header() {
               <Link
                 key={link.label}
                 href={link.href}
-                className={`group relative flex flex-col items-center justify-center text-center px-2 2xl:px-2.5 py-1 transition-colors duration-200 rounded-md select-none caret-transparent cursor-pointer whitespace-nowrap shrink-0 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[#D97706] focus-visible:ring-offset-2 ${
+                className={`group relative flex flex-col items-center justify-center text-center px-1.5 xl:px-2 2xl:px-2.5 py-1 transition-colors duration-200 rounded-md select-none caret-transparent cursor-pointer whitespace-nowrap shrink-0 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[#D97706] focus-visible:ring-offset-2 ${
                   isActive ? "text-[#D97706]" : "text-[#1E293B] hover:text-[#D97706]"
                 }`}
               >
                 {IconComponent && (
                   <IconComponent
-                    className={`w-4 h-4 2xl:w-[18px] 2xl:h-[18px] mb-1 shrink-0 pointer-events-none transition-transform duration-200 group-hover:scale-105 ${
+                    className={`w-[19px] h-[19px] 2xl:w-[20.5px] 2xl:h-[20.5px] mb-1 shrink-0 pointer-events-none transition-transform duration-200 group-hover:scale-105 ${
                       isActive
                         ? "text-[#D97706]"
                         : "text-slate-500 group-hover:text-[#D97706]"
@@ -286,12 +297,12 @@ export default function Header() {
                     aria-hidden="true"
                   />
                 )}
-                <span className="text-xs 2xl:text-[13px] font-medium leading-tight select-none pointer-events-none whitespace-nowrap">
+                <span className="text-[13.5px] 2xl:text-[14px] font-medium leading-tight select-none pointer-events-none whitespace-nowrap">
                   <span className={isActive ? "font-semibold" : ""}>{link.label}</span>
                 </span>
 
                 <span
-                  className={`absolute -bottom-1 left-2 right-2 h-0.5 bg-[#D97706] rounded-full transition-all duration-300 pointer-events-none ${
+                  className={`absolute -bottom-1 left-1.5 right-1.5 h-0.5 bg-[#D97706] rounded-full transition-all duration-300 pointer-events-none ${
                     isActive
                       ? "opacity-100 scale-x-100"
                       : "opacity-0 scale-x-0 group-hover:opacity-60 group-hover:scale-x-100"
@@ -304,13 +315,13 @@ export default function Header() {
         </nav>
 
         {/* Right CTA Actions: Login & Registrasi */}
-        <div className="hidden sm:flex items-center gap-2 xl:gap-2.5 shrink-0 select-none">
+        <div className="hidden sm:flex items-center gap-2 xl:gap-2 2xl:gap-2.5 shrink-0 select-none">
           <Link
             href="/login"
-            className="group relative inline-flex items-center gap-1.5 text-[#1E293B] hover:text-[#D97706] hover:bg-[#F8FAFC] border border-[#E2E8F0] hover:border-[#D97706] text-xs xl:text-[13px] 2xl:text-sm font-semibold px-3 xl:px-3.5 py-2 rounded-md transition-all duration-200 select-none caret-transparent cursor-pointer whitespace-nowrap shrink-0 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#D97706]"
+            className="group relative inline-flex items-center justify-center gap-1.5 text-[#1E293B] hover:text-[#D97706] hover:bg-[#F8FAFC] border border-[#E2E8F0] hover:border-[#D97706] text-xs xl:text-[13px] 2xl:text-sm font-bold px-3 xl:px-3.5 2xl:px-4 h-9.5 xl:h-[40px] 2xl:h-[42px] rounded-lg transition-all duration-200 select-none caret-transparent cursor-pointer whitespace-nowrap shrink-0 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#D97706]"
           >
             <LogIn
-              className="w-3.5 h-3.5 shrink-0 transition-transform duration-200 group-hover:scale-110 pointer-events-none"
+              className="w-4 h-4 shrink-0 transition-transform duration-200 group-hover:scale-110 pointer-events-none"
               aria-hidden="true"
             />
             <span className="leading-none pointer-events-none whitespace-nowrap">Login</span>
@@ -318,10 +329,10 @@ export default function Header() {
 
           <Link
             href="/anggota/pendaftaran"
-            className="group relative inline-flex items-center gap-1.5 bg-[#D97706] hover:bg-[#B45309] text-white text-xs xl:text-[13px] 2xl:text-sm font-semibold px-3.5 xl:px-4 py-2 rounded-md transition-all duration-200 shadow-xs active:translate-y-0 select-none caret-transparent cursor-pointer whitespace-nowrap shrink-0 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#D97706]"
+            className="group relative inline-flex items-center justify-center gap-1.5 bg-[#D97706] hover:bg-[#B45309] text-white text-xs xl:text-[13px] 2xl:text-sm font-bold px-3.5 xl:px-4 2xl:px-4.5 h-9.5 xl:h-[40px] 2xl:h-[42px] rounded-lg transition-all duration-200 shadow-xs active:translate-y-0 select-none caret-transparent cursor-pointer whitespace-nowrap shrink-0 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#D97706]"
           >
             <UserPlus
-              className="w-3.5 h-3.5 shrink-0 transition-transform duration-200 group-hover:scale-110 pointer-events-none"
+              className="w-4 h-4 shrink-0 transition-transform duration-200 group-hover:scale-110 pointer-events-none"
               aria-hidden="true"
             />
             <span className="leading-none pointer-events-none whitespace-nowrap">Registrasi</span>

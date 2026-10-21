@@ -73,22 +73,22 @@ export default function NewsSection({ initialArticles }: NewsSectionProps) {
   return (
     <section
       id="news"
-      className="relative w-full bg-white py-16 sm:py-20 lg:py-24 border-b border-[#E2E8F0] overflow-hidden"
+      className="relative w-full bg-white py-18 sm:py-22 lg:py-26 xl:py-28 border-b border-[#E2E8F0] overflow-hidden"
     >
-      <div className="relative max-w-6xl mx-auto px-4 sm:px-6">
+      <div className="relative max-w-[1280px] 2xl:max-w-[1300px] mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8 sm:mb-10">
           <div>
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-100 text-[#0F172A] text-xs font-bold tracking-wider uppercase mb-3">
-              <Sparkles className="w-3.5 h-3.5 text-[#D97706]" aria-hidden="true" />
+            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-slate-100 text-[#0F172A] text-xs sm:text-[13px] font-bold tracking-wider uppercase mb-3.5">
+              <Sparkles className="w-4 h-4 text-[#D97706]" aria-hidden="true" />
               <span>Kabar Terkini & Publikasi</span>
             </div>
-            <h2 className="text-2xl sm:text-3xl lg:text-4xl font-black text-[#0F172A] tracking-tight">
+            <h2 className="text-2xl sm:text-3xl lg:text-4xl xl:text-[42px] font-black text-[#0F172A] tracking-tight">
               Berita & Informasi Organisasi
             </h2>
-            <p className="text-xs sm:text-sm text-[#64748B] mt-2 max-w-2xl leading-relaxed">
+            <p className="text-xs sm:text-sm lg:text-base text-[#64748B] mt-2.5 max-w-2xl leading-relaxed">
               Ikuti perkembangan regulasi, kegiatan musyawarah keprofesian, dan warta strategis jasa konsultansi di Kepulauan Bangka Belitung.
             </p>
-            <div className="w-12 h-1 bg-[#D97706] mt-4 rounded-full" />
+            <div className="w-14 h-1 bg-[#D97706] mt-4 rounded-full" />
           </div>
 
           <Link
@@ -200,9 +200,9 @@ export default function NewsSection({ initialArticles }: NewsSectionProps) {
                 : "/berita-informasi/rilis-berita";
 
               return (
-                <article className="group relative bg-[#F8FAFC] rounded-xl border border-[#E2E8F0] overflow-hidden hover:shadow-lg transition-all duration-300">
+                <article className="group relative bg-[#F8FAFC] rounded-2xl border border-[#E2E8F0] overflow-hidden hover:shadow-lg transition-all duration-300">
                   <div className="grid grid-cols-1 lg:grid-cols-12 gap-0 items-stretch">
-                    <div className="lg:col-span-7 relative min-h-[220px] sm:min-h-[300px] lg:min-h-[360px] bg-[#0F172A] flex flex-col items-center justify-center p-8 text-center overflow-hidden">
+                    <div className="lg:col-span-7 relative min-h-[240px] sm:min-h-[320px] lg:min-h-[380px] xl:min-h-[420px] bg-[#0F172A] flex flex-col items-center justify-center p-8 sm:p-10 text-center overflow-hidden">
                       {featuredArticle.coverImagePath ? (
                         <>
                           <Image
@@ -227,29 +227,29 @@ export default function NewsSection({ initialArticles }: NewsSectionProps) {
                             </svg>
                           </div>
 
-                          <div className="relative z-10 w-16 h-16 rounded-2xl bg-slate-800 text-white border border-slate-700 flex items-center justify-center mb-3 shadow-md group-hover:scale-105 transition-transform duration-300">
-                            <Newspaper className="w-8 h-8 text-[#D97706]" aria-hidden="true" />
+                          <div className="relative z-10 w-18 h-18 rounded-2xl bg-slate-800 text-white border border-slate-700 flex items-center justify-center mb-3.5 shadow-md group-hover:scale-105 transition-transform duration-300">
+                            <Newspaper className="w-9 h-9 text-[#D97706]" aria-hidden="true" />
                           </div>
 
-                          <p className="relative z-10 text-xs sm:text-sm font-semibold text-slate-200 max-w-md">
+                          <p className="relative z-10 text-xs sm:text-sm lg:text-base font-semibold text-slate-200 max-w-md">
                             {featuredArticle.coverImageAlt || "Dokumentasi Publikasi INKINDO BABEL"}
                           </p>
                         </>
                       )}
 
-                      <div className="absolute top-4 left-4 z-10 flex items-center gap-1.5 bg-[#D97706] text-white text-[11px] font-black tracking-wider uppercase px-3 py-1 rounded-md shadow-xs">
-                        <Bookmark className="w-3 h-3 fill-current" aria-hidden="true" />
+                      <div className="absolute top-4 left-4 z-10 flex items-center gap-1.5 bg-[#D97706] text-white text-[11px] sm:text-xs font-black tracking-wider uppercase px-3 py-1 rounded-md shadow-xs">
+                        <Bookmark className="w-3.5 h-3.5 fill-current" aria-hidden="true" />
                         <span>ARTIKEL UTAMA</span>
                       </div>
 
-                      <div className="absolute bottom-4 left-4 z-10 bg-slate-900/80 backdrop-blur-xs text-slate-300 text-[11px] px-2.5 py-1 rounded border border-slate-700">
+                      <div className="absolute bottom-4 left-4 z-10 bg-slate-900/80 backdrop-blur-xs text-slate-300 text-xs px-3 py-1 rounded border border-slate-700">
                         {featuredArticle.category}
                       </div>
                     </div>
 
-                    <div className="lg:col-span-5 p-6 sm:p-8 lg:p-10 flex flex-col justify-between bg-white">
+                    <div className="lg:col-span-5 p-7 sm:p-9 lg:p-11 flex flex-col justify-between bg-white">
                       <div>
-                        <div className="flex items-center gap-4 text-xs text-[#64748B] mb-3">
+                        <div className="flex items-center gap-4 text-xs sm:text-[13px] text-[#64748B] mb-3.5">
                           <span className="flex items-center gap-1.5 font-medium">
                             <Calendar className="w-4 h-4 text-[#D97706]" aria-hidden="true" />
                             <span>{featuredArticle.publishedAt}</span>
@@ -261,12 +261,12 @@ export default function NewsSection({ initialArticles }: NewsSectionProps) {
                         </div>
 
                         <Link href={featuredHref} className="block group-hover:text-[#D97706] transition-colors">
-                          <h3 className="text-xl sm:text-2xl font-black text-[#0F172A] group-hover:text-[#D97706] transition-colors leading-snug mb-4">
+                          <h3 className="text-xl sm:text-2xl lg:text-3xl font-black text-[#0F172A] group-hover:text-[#D97706] transition-colors leading-snug mb-4">
                             {featuredArticle.title}
                           </h3>
                         </Link>
 
-                        <p className="text-xs sm:text-sm text-[#64748B] leading-relaxed line-clamp-4">
+                        <p className="text-xs sm:text-sm lg:text-base text-[#64748B] leading-relaxed line-clamp-4">
                           {featuredArticle.excerpt}
                         </p>
                       </div>
@@ -279,7 +279,7 @@ export default function NewsSection({ initialArticles }: NewsSectionProps) {
                           <span>Baca Selengkapnya</span>
                           <ChevronRight className="w-4 h-4 text-[#D97706] transition-transform duration-200 group-hover:translate-x-1" aria-hidden="true" />
                         </Link>
-                        <span className="text-[11px] font-mono text-slate-400 uppercase">
+                        <span className="text-[11px] sm:text-xs font-mono text-slate-400 uppercase">
                           {featuredArticle.authorName}
                         </span>
                       </div>
@@ -300,7 +300,7 @@ export default function NewsSection({ initialArticles }: NewsSectionProps) {
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 lg:gap-8">
                   {secondaryArticles.map((article) => {
                     const articleHref = article.slug
                       ? `/berita-informasi/rilis-berita/${article.slug}`
@@ -309,9 +309,9 @@ export default function NewsSection({ initialArticles }: NewsSectionProps) {
                     return (
                       <article
                         key={article.id}
-                        className="group bg-white rounded-lg border border-[#E2E8F0] overflow-hidden flex flex-col justify-between hover:shadow-md hover:-translate-y-0.5 transition-all duration-200"
+                        className="group bg-white rounded-xl border border-[#E2E8F0] overflow-hidden flex flex-col justify-between hover:shadow-md hover:-translate-y-0.5 transition-all duration-200"
                       >
-                        <div className="h-44 sm:h-48 bg-[#F8FAFC] border-b border-[#E2E8F0] flex flex-col items-center justify-center p-5 text-center relative overflow-hidden group-hover:bg-slate-100 transition-colors">
+                        <div className="h-48 sm:h-54 xl:h-60 bg-[#F8FAFC] border-b border-[#E2E8F0] flex flex-col items-center justify-center p-5 text-center relative overflow-hidden group-hover:bg-slate-100 transition-colors">
                           {article.coverImagePath ? (
                             <>
                               <Image
@@ -325,52 +325,52 @@ export default function NewsSection({ initialArticles }: NewsSectionProps) {
                             </>
                           ) : (
                             <>
-                              <div className="w-10 h-10 rounded-xl bg-white text-[#0F172A] flex items-center justify-center shadow-xs mb-2 border border-[#E2E8F0] group-hover:scale-105 transition-transform duration-200">
-                                <Newspaper className="w-5 h-5 text-[#D97706]" aria-hidden="true" />
+                              <div className="w-12 h-12 rounded-xl bg-white text-[#0F172A] flex items-center justify-center shadow-xs mb-2 border border-[#E2E8F0] group-hover:scale-105 transition-transform duration-200">
+                                <Newspaper className="w-6 h-6 text-[#D97706]" aria-hidden="true" />
                               </div>
-                              <span className="text-xs font-medium text-[#64748B] max-w-xs line-clamp-1">
+                              <span className="text-xs sm:text-[13px] font-medium text-[#64748B] max-w-xs line-clamp-1">
                                 {article.coverImageAlt || "Dokumentasi Publikasi"}
                               </span>
                             </>
                           )}
-                          <span className="absolute top-3 left-3 z-10 bg-[#0F172A] text-slate-200 text-[10px] font-bold px-2 py-0.5 rounded shadow-xs">
+                          <span className="absolute top-3.5 left-3.5 z-10 bg-[#0F172A] text-slate-200 text-[11px] font-bold px-2.5 py-1 rounded shadow-xs">
                             {article.category}
                           </span>
                         </div>
 
-                        <div className="p-5 flex-grow flex flex-col justify-between space-y-3">
+                        <div className="p-6 sm:p-7 flex-grow flex flex-col justify-between space-y-3.5">
                           <div>
-                            <div className="flex items-center gap-3 text-[11px] text-[#64748B] mb-2">
-                              <span className="flex items-center gap-1">
-                                <Calendar className="w-3.5 h-3.5 text-[#D97706]" aria-hidden="true" />
+                            <div className="flex items-center gap-3 text-xs text-[#64748B] mb-2.5">
+                              <span className="flex items-center gap-1.5 font-medium">
+                                <Calendar className="w-4 h-4 text-[#D97706]" aria-hidden="true" />
                                 <span>{article.publishedAt}</span>
                               </span>
-                              <span className="flex items-center gap-1">
-                                <Clock className="w-3.5 h-3.5 text-slate-400" aria-hidden="true" />
+                              <span className="flex items-center gap-1.5">
+                                <Clock className="w-4 h-4 text-slate-400" aria-hidden="true" />
                                 <span>{article.readTime}</span>
                               </span>
                             </div>
 
                             <Link href={articleHref} className="block group-hover:text-[#D97706] transition-colors">
-                              <h3 className="text-sm sm:text-base font-bold text-[#0F172A] group-hover:text-[#D97706] transition-colors leading-snug line-clamp-2">
+                              <h3 className="text-base sm:text-lg font-bold text-[#0F172A] group-hover:text-[#D97706] transition-colors leading-snug line-clamp-2">
                                 {article.title}
                               </h3>
                             </Link>
 
-                            <p className="text-xs text-[#64748B] leading-relaxed mt-2 line-clamp-2">
+                            <p className="text-xs sm:text-[13.5px] text-[#64748B] leading-relaxed mt-2 line-clamp-2">
                               {article.excerpt}
                             </p>
                           </div>
 
-                          <div className="pt-3 border-t border-[#E2E8F0] flex items-center justify-between">
+                          <div className="pt-3.5 border-t border-[#E2E8F0] flex items-center justify-between">
                             <Link
                               href={articleHref}
-                              className="inline-flex items-center gap-1 text-xs font-semibold text-[#0F172A] hover:text-[#D97706] transition"
+                              className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-[#0F172A] hover:text-[#D97706] transition"
                             >
                               <span>Baca Selengkapnya</span>
                               <ArrowRight className="w-3.5 h-3.5 text-[#D97706] transition-transform duration-200 group-hover:translate-x-0.5" aria-hidden="true" />
                             </Link>
-                            <span className="text-[10px] font-mono text-slate-400">
+                            <span className="text-[11px] sm:text-xs font-mono text-slate-400">
                               {article.authorName}
                             </span>
                           </div>

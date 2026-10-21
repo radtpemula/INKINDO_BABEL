@@ -12,19 +12,21 @@ import Footer from "@/components/Footer";
 import { mainPartners, additionalPartners } from "@/data/landing";
 import { getActiveHeroSlides, getHeroSettings } from "@/lib/public/hero";
 import { getPublicLatestNews } from "@/lib/public/news";
+import { getSiteSettings } from "@/lib/public/settings";
 
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
-  const [heroSlides, heroSettings, latestNews] = await Promise.all([
+  const [heroSlides, heroSettings, latestNews, siteSettings] = await Promise.all([
     getActiveHeroSlides(),
     getHeroSettings(),
     getPublicLatestNews(6),
+    getSiteSettings(),
   ]);
 
   return (
     <div className="flex flex-col min-h-screen bg-white">
-      <Header />
+      <Header settings={siteSettings} />
       <main className="flex-grow">
         <Hero slides={heroSlides} settings={heroSettings} />
         <StatisticsSection />
@@ -49,7 +51,7 @@ export default async function Home() {
           bgColor="gray"
         />
       </main>
-      <Footer />
+      <Footer settings={siteSettings} />
     </div>
   );
 }

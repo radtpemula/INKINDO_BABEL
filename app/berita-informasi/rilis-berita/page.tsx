@@ -17,6 +17,7 @@ import {
   Filter,
 } from "lucide-react";
 import { getPublicNewsArchive } from "@/lib/public/news";
+import { getSiteSettings } from "@/lib/public/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -54,23 +55,26 @@ export default async function RilisBeritaPage({ searchParams }: RilisBeritaPageP
   const category = (resolvedParams.kategori || "Semua").trim();
   const search = (resolvedParams.q || "").trim();
 
-  const archiveData = await getPublicNewsArchive({
-    page,
-    limit: 9,
-    search,
-    category,
-  });
+  const [archiveData, siteSettings] = await Promise.all([
+    getPublicNewsArchive({
+      page,
+      limit: 9,
+      search,
+      category,
+    }),
+    getSiteSettings(),
+  ]);
 
   const { articles, total, totalPages, categories } = archiveData;
 
   return (
     <div className="flex flex-col min-h-screen bg-white">
-      <Header />
+      <Header settings={siteSettings} />
 
       <main className="flex-grow">
         {/* Banner Header Halaman Arsip */}
         <section className="bg-[#0F172A] text-white py-8 sm:py-10 border-b border-slate-800">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6">
+          <div className="max-w-[1280px] 2xl:max-w-[1300px] mx-auto px-4 sm:px-6 lg:px-8">
             <nav aria-label="Breadcrumb" className="mb-3">
               <ol className="flex flex-wrap items-center gap-1.5 text-xs text-slate-300">
                 <li>
@@ -119,7 +123,7 @@ export default async function RilisBeritaPage({ searchParams }: RilisBeritaPageP
 
         {/* Konten Arsip Berita */}
         <section className="py-10 sm:py-14 bg-[#F8FAFC]">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6">
+          <div className="max-w-[1280px] 2xl:max-w-[1300px] mx-auto px-4 sm:px-6 lg:px-8">
             {/* Filter & Search Bar */}
             <div className="bg-white rounded-xl border border-[#E2E8F0] p-5 sm:p-6 mb-8 sm:mb-10 shadow-xs">
               <form
@@ -398,7 +402,7 @@ export default async function RilisBeritaPage({ searchParams }: RilisBeritaPageP
         </section>
       </main>
 
-      <Footer />
+      <Footer settings={siteSettings} />
     </div>
   );
 }
