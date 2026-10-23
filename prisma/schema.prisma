@@ -113,3 +113,42 @@ model NewsArticle {
   @@index([category, isPublished])
 }
 
+// 7. Partner - Model mitra kerja dan afiliasi strategis organisasi
+model Partner {
+  id         String   @id @default(cuid())
+  name       String
+  shortName  String
+  category   String?
+  logoPath   String?
+  websiteUrl String?
+  order      Int      @default(0)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([order, isActive])
+  @@index([category])
+}
+
+// 8. MemberWork - Model karya dan portofolio proyek anggota
+model MemberWork {
+  id          String   @id @default(cuid())
+  title       String
+  slug        String   @unique
+  category    String
+  company     String
+  year        String
+  description String?
+  imagePath   String?
+  imageAlt    String?
+  client      String?
+  order       Int      @default(0)
+  isFeatured  Boolean  @default(true)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isActive, order])
+  @@index([isFeatured, isActive])
+}
+

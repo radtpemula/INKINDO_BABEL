@@ -49,3 +49,38 @@ html {
 [id] {
   scroll-margin-top: 5rem;
 }
+
+@keyframes marquee-scroll {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    transform: translate3d(-100%, 0, 0);
+  }
+}
+
+.animate-marquee-scroll {
+  animation: marquee-scroll var(--marquee-duration, 42s) linear infinite;
+  will-change: transform;
+}
+
+.marquee-container:hover .animate-marquee-scroll,
+.marquee-container:focus-within .animate-marquee-scroll {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-marquee-scroll {
+    animation: none !important;
+    transform: none !important;
+  }
+  .marquee-viewport {
+    overflow-x: auto !important;
+    scroll-snap-type: x mandatory;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+  }
+  .marquee-duplicate-track {
+    display: none !important;
+  }
+}

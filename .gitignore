@@ -39,10 +39,14 @@ yarn-error.log*
 *.db-journal
 *.db-wal
 *.db-shm
+*.db.bak
+*.db-backup*
 prisma/*.db
 prisma/*.db-journal
 prisma/*.db-wal
 prisma/*.db-shm
+prisma/*.db.bak
+prisma/*.db-backup*
 
 # uploads
 public/uploads/**

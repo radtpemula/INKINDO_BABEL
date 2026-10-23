@@ -7,7 +7,8 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
-    "admin:create": "tsx scripts/init-admin.ts"
+    "admin:create": "tsx scripts/init-admin.ts",
+    "db:seed:partners-works": "tsx scripts/seed-partners-and-works.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

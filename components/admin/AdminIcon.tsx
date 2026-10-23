@@ -20,6 +20,7 @@ import {
   Bell,
   Search,
   SlidersHorizontal,
+  Briefcase,
 } from "lucide-react";
 import type { AdminIconName } from "./types";
 
@@ -62,6 +63,8 @@ export function AdminIcon({ name, className = "w-4 h-4" }: AdminIconProps): Reac
       return <Search className={className} />;
     case "SlidersHorizontal":
       return <SlidersHorizontal className={className} />;
+    case "Briefcase":
+      return <Briefcase className={className} />;
     default:
       return <LayoutDashboard className={className} />;
   }

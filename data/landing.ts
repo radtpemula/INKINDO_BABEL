@@ -372,6 +372,11 @@ export const additionalPartners: PartnerItem[] = [
   { name: "Himpunan Ahli Manajemen Konstruksi", shortName: "HAMKI", category: "Asosiasi Profesi" },
 ];
 
+export const strategicPartners: PartnerItem[] = [
+  ...mainPartners,
+  ...additionalPartners,
+];
+
 export const footerData = {
   orgName: "INKINDO BABEL",
   tagline: "Dewan Pengurus Provinsi Ikatan Nasional Konsultan Indonesia Kepulauan Bangka Belitung",

@@ -29,7 +29,8 @@ export type AdminIconName =
   | "ChevronDown"
   | "Bell"
   | "Search"
-  | "SlidersHorizontal";
+  | "SlidersHorizontal"
+  | "Briefcase";
 
 export interface AdminNavItem {
   id: string;
@@ -87,6 +88,18 @@ export const defaultAdminNavSections: AdminNavSection[] = [
         href: "/babel-and-adt/news",
       },
       {
+        id: "member-works",
+        label: "Karya Anggota",
+        iconName: "Briefcase",
+        href: "/babel-and-adt/member-works",
+      },
+      {
+        id: "partners",
+        label: "Mitra Kerja",
+        iconName: "Handshake",
+        href: "/babel-and-adt/partners",
+      },
+      {
         id: "regulations",
         label: "Dokumen & Peraturan",
         iconName: "FileCheck",
@@ -95,11 +108,6 @@ export const defaultAdminNavSections: AdminNavSection[] = [
         id: "tenders",
         label: "Informasi Lelang / Tender",
         iconName: "Gavel",
-      },
-      {
-        id: "partners",
-        label: "Mitra Kerja",
-        iconName: "Handshake",
       },
     ],
   },

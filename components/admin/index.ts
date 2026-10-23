@@ -13,3 +13,5 @@ export * from "./HeroManagementClient";
 export * from "./HeroSettingsClient";
 export * from "./NewsManagementClient";
 export * from "./SiteSettingsClient";
+export * from "./PartnerManagementClient";
+export * from "./MemberWorkManagementClient";

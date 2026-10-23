@@ -9,19 +9,29 @@ import NewsSection from "@/components/NewsSection";
 import SbuRegistration from "@/components/SbuRegistration";
 import MemberWorks from "@/components/MemberWorks";
 import Footer from "@/components/Footer";
-import { mainPartners, additionalPartners } from "@/data/landing";
 import { getActiveHeroSlides, getHeroSettings } from "@/lib/public/hero";
 import { getPublicLatestNews } from "@/lib/public/news";
 import { getSiteSettings } from "@/lib/public/settings";
+import { getPublicPartnersForHome } from "@/lib/public/partner";
+import { getFeaturedMemberWorksForHome } from "@/lib/public/member-work";
 
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
-  const [heroSlides, heroSettings, latestNews, siteSettings] = await Promise.all([
+  const [
+    heroSlides,
+    heroSettings,
+    latestNews,
+    siteSettings,
+    partners,
+    featuredWorks,
+  ] = await Promise.all([
     getActiveHeroSlides(),
     getHeroSettings(),
     getPublicLatestNews(6),
     getSiteSettings(),
+    getPublicPartnersForHome(),
+    getFeaturedMemberWorksForHome(4),
   ]);
 
   return (
@@ -33,21 +43,14 @@ export default async function Home() {
         <MembershipSteps />
         <AboutSection />
         <RenewalSteps />
+        <NewsSection initialArticles={latestNews} />
+        <SbuRegistration />
+        <MemberWorks initialWorks={featuredWorks} />
         <Partners
           id="partners"
           title="Mitra Strategis & Afiliasi Industri"
-          subtitle="KEMITRAAN NASIONAL"
-          partners={mainPartners}
-          bgColor="gray"
-        />
-        <NewsSection initialArticles={latestNews} />
-        <SbuRegistration />
-        <MemberWorks />
-        <Partners
-          id="additional-partners"
-          title="Mitra Lembaga Sertifikasi & Asosiasi Profesi"
-          subtitle="JARINGAN KERJASAMA"
-          partners={additionalPartners}
+          subtitle="JARINGAN KEMITRAAN"
+          partners={partners}
           bgColor="gray"
         />
       </main>
