@@ -48,6 +48,11 @@ prisma/*.db-shm
 prisma/*.db.bak
 prisma/*.db-backup*
 
+# database dumps
+*.sql
+!prisma/**/*.sql
+*.dump
+
 # uploads
 public/uploads/**
 !public/uploads/**/
