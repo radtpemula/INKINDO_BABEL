@@ -2,12 +2,23 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentAdmin } from "@/lib/auth/server";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { saveHeroImage, MAX_HERO_IMAGE_SIZE_BYTES } from "@/lib/storage/hero";
+import { checkUploadRateLimit, getClientIdentifier } from "@/lib/security/rate-limit";
+import { createUploadReceiptToken } from "@/lib/security/upload-receipt";
 
 export async function POST(request: NextRequest | Request) {
   try {
     let tokenFromCookie: string | null = null;
     if ("cookies" in request && typeof request.cookies?.get === "function") {
       tokenFromCookie = request.cookies.get(SESSION_COOKIE_NAME)?.value ?? null;
+    }
+    if (!tokenFromCookie && typeof request.headers?.get === "function") {
+      const cookieHeader = request.headers.get("cookie") || "";
+      const match = cookieHeader.match(
+        new RegExp(`(?:^|;\\s*)${SESSION_COOKIE_NAME}=([^;]*)`)
+      );
+      if (match) {
+        tokenFromCookie = decodeURIComponent(match[1]);
+      }
     }
 
     const auth = await getCurrentAdmin(tokenFromCookie);
@@ -27,6 +38,24 @@ export async function POST(request: NextRequest | Request) {
           error: "Sesi tidak valid atau telah berakhir. Silakan login kembali.",
         },
         { status: 401 }
+      );
+    }
+
+    const rateLimit = checkUploadRateLimit(
+      getClientIdentifier(request, auth.user.id)
+    );
+    if (!rateLimit.isAllowed) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Terlalu banyak permintaan unggah gambar. Silakan coba lagi nanti.",
+        },
+        {
+          status: 429,
+          headers: {
+            "Retry-After": String(rateLimit.retryAfterSeconds),
+          },
+        }
       );
     }
 
@@ -67,7 +96,7 @@ export async function POST(request: NextRequest | Request) {
     const buffer = Buffer.from(arrayBuffer);
 
     const saveResult = await saveHeroImage(buffer);
-    if (!saveResult.success) {
+    if (!saveResult.success || !saveResult.publicPath) {
       return NextResponse.json(
         {
           success: false,
@@ -76,6 +105,12 @@ export async function POST(request: NextRequest | Request) {
         { status: 400 }
       );
     }
+
+    const uploadToken = await createUploadReceiptToken({
+      adminId: auth.user.id,
+      module: "hero",
+      publicPath: saveResult.publicPath,
+    });
 
     return NextResponse.json(
       {
@@ -86,17 +121,16 @@ export async function POST(request: NextRequest | Request) {
           filename: saveResult.filename,
           sizeBytes: saveResult.sizeBytes,
           mimeType: saveResult.mimeType,
+          uploadToken,
         },
       },
       { status: 201 }
     );
-  } catch (err) {
-    const errorMsg =
-      err instanceof Error ? err.message : "Terjadi kesalahan internal pada server.";
+  } catch {
     return NextResponse.json(
       {
         success: false,
-        error: errorMsg,
+        error: "Terjadi kesalahan internal pada server.",
       },
       { status: 500 }
     );

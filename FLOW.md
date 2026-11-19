@@ -92,9 +92,9 @@ Memeriksa cookie 'inkindo_admin_session' via getCurrentAdmin()
         ↓
       Render Dashboard Shell (Sidebar, Header, Main Content)
         ├── /babel-and-adt                 -> Ringkasan Metrik Sistem & Panduan CLI
-        ├── /babel-and-adt/hero            -> Manajemen Hero Slideshow, Teks Utama, & Kartu
-        ├── /babel-and-adt/news            -> Manajemen Berita & Publikasi (CRUD & Toggle Publish)
-        ├── /babel-and-adt/partners        -> Manajemen Mitra Kerja (CRUD, Reorder, & Upload Logo)
+        ├── /babel-and-adt/hero            -> Manajemen Hero Slideshow, Background, & Kartu
+        ├── /babel-and-adt/news            -> Manajemen Berita & Publikasi (CRUD & Tiptap Editor)
+        ├── /babel-and-adt/partners        -> Manajemen Mitra Kerja (CRUD, Reorder, & Upload-on-Submit)
         ├── /babel-and-adt/member-works    -> Manajemen Karya Anggota (CRUD, Reorder, Featured Toggle)
         ├── /babel-and-adt/settings        -> Pengaturan Website (Identitas, Kontak, Topbar, Footer, Medsos)
         └── /babel-and-adt/admin           -> Manajemen Akun Admin (Khusus SUPER_ADMIN)
@@ -102,73 +102,151 @@ Memeriksa cookie 'inkindo_admin_session' via getCurrentAdmin()
 
 ---
 
-## 4. Alur Upload Berkas & Pemrosesan Gambar
+## 4. Alur Upload-on-Submit Terpadu (Mitra, Karya Anggota, Hero, Berita Cover)
+
+Seluruh modul formulir CMS menerapkan alur **Upload-on-Submit** terkoordinasi (`components/admin/deferred-image-upload.ts` dan `use-deferred-image-upload.ts`) untuk menjamin tidak ada berkas orphan yang tercipta saat pemilihan atau penggantian gambar:
 
 ```text
-Admin Memilih Berkas Gambar (JPEG/PNG/WebP maks 5 MB) pada Modal Form
+Admin Memilih Berkas Gambar (JPEG/PNG/WebP maks 5 MB) pada Modal
   ↓
-Client Component memanggil fetch("POST", "/api/admin/*-upload", formData)
+1. Validasi Awal di Client:
+   - Cek ukuran (0 < size <= 5 MB) & tipe MIME resmi
+   - Tolak dan reset input jika tidak valid
   ↓
-API Route Handler Upload Terproteksi (app/api/admin/*-upload/route.ts):
-  1. Validasi autentikasi admin via getCurrentAdmin() -> Tolak 401/403 jika tidak sah
-  2. Ekstraksi buffer biner berkas dari Request FormData
-  3. Validasi batas ukuran berkas (<= 5 MB) -> Tolak 400 jika melebihi
-  4. Validasi signature magic bytes biner asli buffer (lib/storage/image-validation.ts)
-     (Hanya signature JPEG, PNG, dan WebP yang diizinkan; SVG/HTML/EXE ditolak)
-  5. Pembuatan nama berkas acak unik: [prefix]-[timestamp]-[uuid].[ext]
-  6. Penulisan berkas sementara (.tmp-[filename]) lalu rename atomik ke target
-  7. Return JSON status 201: { publicPath: "/uploads/.../filename.webp" }
+2. Penanganan State Lokal (Belum Ada Upload):
+   - selectedFile disimpan di state lokal komponen
+   - URL.createObjectURL(file) dibuat untuk pratinjau instan
+   - URL object sebelumnya otomatis di-revoke (URL.revokeObjectURL)
   ↓
-Client menyimpan publicPath ke dalam state formulir
-  ↓
-Catatan: Upload API murni menangani penyimpanan berkas dan TIDAK mengubah basis data.
+3. Administrator Mengisi Form & Menekan Tombol "Simpan":
+   - Guard synchronous lock (useRef) memblokir klik ganda (double-submit)
+   - Seluruh validasi data formulir dijalankan terlebih dahulu
+   ├── Jika validasi form gagal:
+   │     ↓
+   │   Hentikan proses; TIDAK ADA request upload yang dikirim
+   │
+   └── Jika validasi form lolos:
+         ↓
+       Kirim request POST ke endpoint upload (/api/admin/*-upload) dengan FormData
+         ↓
+       Backend Pipeline (Sharp & Storage):
+         a. Autentikasi sesi admin aktif (getCurrentAdmin)
+         b. In-memory rate limiting (checkUploadRateLimit)
+         c. Validasi magic bytes biner asli & ukuran buffer
+         d. Sharp decode, validasi dimensi (maks 8192px / 32 MP), rotasi visual otomatis
+         e. Stripping metadata sensitif total (EXIF, GPS kamera)
+         f. Re-encode terpadu (JPEG mozjpeg, PNG compression 9, WebP q85)
+         g. Penulisan atomik via .tmp-[filename] lalu rename
+         h. Terbitkan token kepemilikan bertanda tangan: uploadToken (TTL 15 menit)
+         i. Return HTTP 201: { success: true, path, data: { publicPath, uploadToken } }
+         ↓
+       Promosikan publicPath ke state dan kosongkan selectedFile (untuk retry safe)
+         ↓
+       Eksekusi Server Action Penyimpanan Database (create/update):
+         ├── Jika Server Action BERHASIL:
+         │     ↓
+         │   Database ter-update, bersihkan berkas lama via safeDeleteUnreferencedImage
+         │   (hanya jika berkas lama tidak lagi direferensikan record lain)
+         │   Tutup modal dan perbarui tabel dashboard
+         │
+         ├── Jika Server Action GAGAL PASTI (definite_failure, misal slug duplikat):
+         │     ↓
+         │   Server menerbitkan failure receipt resmi: rollbackToken
+         │   Formulir tetap terbuka; berkas baru dipertahankan di form state
+         │   ├── Administrator Memperbaiki Form & Klik "Simpan" Ulang (Retry):
+         │   │     ↓
+         │   │   Langsung panggil Server Action TANPA mengunggah file baru
+         │   │
+         │   └── Administrator Membatalkan / Menutup Modal:
+         │         ↓
+         │       Kirim rollbackPendingUploadAction({ module, publicPath, uploadToken, rollbackToken })
+         │       Server memverifikasi token & referensi sebelum menghapus berkas orphan
+         │
+         └── Jika Server Action MENGALAMI TIMEOUT / ERROR TIDAK DIKETAHUI (unknown):
+               ↓
+             Status dikunci menjadi "unknown" secara permanen (sticky unknown)
+             Client DILARANG menghapus berkas; berkas dipertahankan aman
+             Dicatat dalam log sebagai [orphan-candidate] non-destruktif
 ```
 
 ---
 
-## 5. Alur CRUD & Revalidasi Cache Sisi Server
+## 5. Alur Khusus Gambar Inline Editor Tiptap (Artikel Berita)
+
+Gambar inline di dalam artikel berita dikelola dengan aturan draft-safety yang ketat untuk mencegah terhapusnya gambar yang sedang diedit:
 
 ```text
-Admin Menekan Tombol Simpan pada Formulir
+Admin Membuka Editor Berita -> Klik "Sisipkan Gambar" pada Toolbar
   ↓
-Client Component memanggil Server Action (lib/admin/*-actions.ts)
+Pilih berkas JPEG/PNG/WebP, isi Alt (wajib), Caption (opsional), Ukuran, & Alignment
   ↓
-Eksekusi Server Action:
-  1. Validasi Otorisasi: verifyActiveAdmin() memeriksa sesi administrator aktif
-  2. Validasi Input: Pemeriksaan batas karakter, sanitasi teks, format URL, & keunikan slug
-  3. Mutasi Basis Data: Prisma Client mengeksekusi operasi (create/update/delete/transaction)
-  4. Pembersihan Berkas Aman (Safe Image Cleanup):
-     - Berkas gambar lama dihapus HANYA jika operasi basis data berhasil
-     - Berkas gambar lama TIDAK AKAN dihapus jika masih digunakan oleh record lain (shared protection)
-     - Pencegahan path traversal melalui sanitasi batas direktori
-  5. Revalidasi Cache: safeRevalidate() memanggil revalidatePath() ke rute publik & admin terkait
+Klik "Unggah & Sisipkan" pada Dialog Inline:
+  1. POST ke /api/admin/news-inline-upload (Sharp pipeline, max 5 MB, no EXIF)
+  2. Endpoint mengembalikan HTTP 201 { publicPath, uploadToken }
+  3. Node <figure><img><figcaption> disisipkan ke posisi kursor editor
+  4. Sesi editor mencatat berkas pada sessionInlineUploadsRef (path -> uploadToken)
   ↓
-Respons JSON dikirim kembali ke Client -> Notifikasi sukses ditampilkan -> Tabel diperbarui
-```
-
----
-
-## 6. Alur Publikasi dari Basis Data ke Website
-
-```text
-Permintaan Pengunjung ke Halaman Publik (Beranda, Arsip, atau Detail Slug)
-  ↓
-Server Component mengeksekusi fetcher publik (lib/public/*.ts)
-  ↓
-Query Prisma menyaring record aktif (isActive: true, dan isFeatured: true untuk etalase)
-  ├── Jika record ditemukan:
+Skenario Selama Penulisan & Penyuntingan:
+  ├── Administrator Menghapus Node Gambar di Editor (Backspace / Delete):
   │     ↓
-  │   Kembalikan data dinamis terurut dari basis data SQLite
+  │   File fisik TIDAK LANGSUNG DIHAPUS dari disk!
+  │   File tetap utuh untuk mendukung Undo (Ctrl+Z), Redo, atau penyisipan ulang
   │
-  ├── Jika tabel kosong (count === 0):
+  ├── Administrator Membatalkan Naskah (Klik "Batal" atau Tutup Modal):
   │     ↓
-  │   Aktifkan kaidah fallback statis dari data/landing.ts (instalasi baru)
+  │   Panggil rollbackDraftInlineUploadsAction({ uploads, saveOutcome })
+  │   HANYA berkas yang terbukti milik sesi draft tersebut dan bebas referensi
+  │   yang akan dibersihkan. Jika status simpan tidak pasti, file tetap dipertahankan
   │
-  └── Jika record ada di tabel tetapi SEMUANYA nonaktif (isActive: false):
+  └── Administrator Menekan "Simpan Artikel" (Submit):
         ↓
-      Kembalikan array kosong [] (Kaidah isolasi: data statis lama tidak boleh bocor kembali)
+      Konten artikel disanitasi server (whitelist tag & attribute, isolasi path)
+      Server Action create/update menyimpan artikel ke basis data MySQL
+        ↓
+      Pembersihan Pasca-Simpan (cleanupUnusedInlineImagesPostSave):
+        1. Bandingkan gambar naskah lama dengan naskah baru
+        2. Periksa gambar sesi baru yang diunggah tapi tidak disisipkan ke naskah final
+        3. Verifikasi isNewsInlineImageReferenced (memindai seluruh artikel berita)
+        4. Hapus hanya gambar yang benar-benar tidak lagi terpakai di mana pun
+```
+
+---
+
+## 6. Alur Penghapusan Data & Reference-Aware Deletion
+
+Ketika sebuah entitas (Mitra, Karya, Hero Slide, atau Berita) dihapus oleh administrator:
+
+```text
+Admin Mengonfirmasi Penghapusan pada Dialog Konfirmasi
   ↓
-Komponen me-render data ke HTML bersih tanpa kebocoran data draft/nonaktif
+Client Component memanggil Server Action Penghapusan (delete*Action)
+  ↓
+1. Validasi Hak Akses: verifyActiveAdmin() memastikan sesi admin aktif
+  ↓
+2. Eksekusi Mutasi Basis Data:
+   Baris data dihapus terlebih dahulu dari MySQL (prisma.*.delete)
+  ↓
+3. Koordinasi Reference-Aware Deletion (safeDeleteUnreferencedImage):
+   - Ambil kunci mutex per-path: withImagePathLock(path)
+   - Jalankan pemeriksaan referensi lintas tabel:
+     * Hero Image: Cek HeroSlide lain dan SiteSetting (hero_bg_image, hero_card_image)
+       (Proteksi mutlak: Berkas /images/* tidak boleh dihapus)
+     * News Cover: Cek coverImagePath artikel lain dan pemindaian <img> pada seluruh NewsArticle.content
+     * News Inline: Cek pemindaian <img> pada seluruh NewsArticle.content dan coverImagePath
+     * Partner / Work: Cek duplikasi logo atau foto karya pada record lain
+   ├── Jika berkas MASIH direferensikan record lain (Shared Image):
+   │     ↓
+   │   Pertahankan berkas fisik; JANGAN DIHAPUS
+   │
+   ├── Jika kueri basis data mengalami galat (Fail-Safe):
+   │     ↓
+   │   Kembalikan status true (dianggap masih dipakai); JANGAN DIHAPUS
+   │
+   └── Jika terbukti TIDAK ADA referensi lain yang menggunakan berkas tersebut:
+         ↓
+       Hapus berkas fisik secara aman dari public/uploads/
+  ↓
+4. Revalidasi Cache Publik & Dashboard (safeRevalidate)
 ```
 
 ---
@@ -177,16 +255,19 @@ Komponen me-render data ke HTML bersih tanpa kebocoran data draft/nonaktif
 
 - **Tahap Selesai (Completed):**
   - Phase 1–5: Prototipe landing page awal
-  - Tahap 1: Fondasi basis data SQLite & Prisma ORM
-  - Tahap 2: Autentikasi sesi JWT, login page, & CLI init
-  - Tahap 3: Manajemen administrator & proteksi SUPER_ADMIN
-  - Tahap 4: Hero slideshow & upload gambar banner
-  - Tahap 5: Redesign visual tema Engineering Slate + Burnt Amber
-  - Tahap 6: Pengaturan konten hero terpadu & kartu teknis
-  - Tahap 7: Manajemen CMS berita, arsip rilis berita, & halaman detail slug
+  - Tahap 1–7: Fondasi database, autentikasi, manajemen admin, hero, visual, settings, rilis berita
   - Tahap 8.1: Audit komprehensif fondasi CMS
-  - Tahap 8.2: Pengaturan website (kontak, topbar, footer, medsos dual-handle)
-  - Tahap 8.4: Manajemen Mitra Kerja & Karya Anggota (8.4.1 s.d. 8.4.5) termasuk infinite marquee carousel
+  - Tahap 8.2: Pengaturan website (identitas, kontak, medsos dual-handle)
+  - Tahap 8.4: Manajemen Mitra Kerja & Karya Anggota (CRUD, reorder, direktori publik, infinite marquee)
+  - RTE Tahap 1 / 1B: Fondasi format konten, marker versi v1:html, dan sanitizer HTML server-side
+  - RTE Tahap 2A / 2B: Editor Tiptap admin, encoding marker v1, dan rendering publik aman
+  - RTE Tahap 3: Node gambar inline artikel (upload terproteksi, figure/caption, ukuran responsif)
+  - Fase 1–3 Media: Hardening upload terpusat, reference-aware deletion, dan Sharp decode/re-encode
+  - Fase M1–M3C: Migrasi database dari SQLite ke MySQL 8.4 Docker (`inkindo_babel_db`), backup logic, dan verifikasi runtime
+  - Fase 5C-1: Pola upload-on-submit terpadu untuk Mitra dan Karya Anggota
+  - Fase 5C-2: Safe failed-save handling, upload receipt token, dan rollback failure receipt
+  - Finalisasi Media: Standardisasi Hero, News Cover, mutex kunci per-path, dan anti-replay JTI
+  - Tiptap Inline Lifecycle: Post-save inline cleanup, draft cancel rollback, proteksi shared inline, lolos 11 suite test (214/214)
 - **Tahap Sengaja Ditunda (ON HOLD):**
   - **Tahap 8.3 — Manajemen Konten Beranda:** DITUNDA atas keputusan eksplisit pengguna karena kebutuhan klien terkait dinamisasi urutan seksi beranda belum jelas.
 - **Tahap Belum Dikerjakan (Upcoming):**
@@ -199,8 +280,7 @@ Komponen me-render data ke HTML bersih tanpa kebocoran data draft/nonaktif
 
 *(Bagian ini dipertahankan sebagai referensi riwayat fase awal proyek)*
 
-Pada tahap awal pembuatan prototipe, proyek berfokus murni pada keselarasan visual antarmuka terhadap tangkapan layar acuan (DKI Jakarta):
+Pada tahap awal pembuatan prototipe, proyek berfokus murni pada keselarasan visual antarmuka terhadap tangkapan layar acuan:
 - Alur awal menitikberatkan pada parsing visual 10 seksi linier dengan data statis dari `data/landing.ts`.
 - Palet warna awal menggunakan Navy `#14245C` dan Orange `#FF6600`.
-- Saat itu fitur backend, basis data, autentikasi, dan panel CMS memang sengaja belum dibangun.
-- Seiring evolusi proyek menjadi aplikasi resmi INKINDO BABEL, identitas visual diperbarui menjadi Engineering Slate + Burnt Amber, seksi mitra disatukan, dan seluruh fondasi full-stack CMS dibangun secara bertahap hingga Tahap 8.4.
+- Seiring evolusi proyek menjadi aplikasi resmi INKINDO BABEL, identitas visual diperbarui menjadi Engineering Slate + Burnt Amber, seksi mitra disatukan, database dimigrasikan ke MySQL 8.4 Docker, dan seluruh fondasi full-stack CMS dibangun secara bertahap hingga pengelolaan media terpadu saat ini.

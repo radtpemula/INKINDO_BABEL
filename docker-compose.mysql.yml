@@ -1,0 +1,52 @@
+# ==============================================================================
+# INKINDO BABEL — DOCKER COMPOSE CONFIGURATION: MYSQL 8.4 LTS
+# Fase M1: Database Target Setup
+# ==============================================================================
+# Catatan Keamanan:
+# 1. Port 3306 hanya diekspos ke 127.0.0.1 (localhost) pada host development.
+#    Dilarang mengubah binding ke 0.0.0.0 demi mencegah eksposur ke jaringan publik.
+# 2. Seluruh kredensial dimuat melalui environment variable lokal (.env.mysql).
+#    Dilarang menaruh password plain-text dalam file ini.
+# 3. Data database disimpan secara persisten di Docker named volume 'inkindo_mysql_data'.
+# ==============================================================================
+
+name: inkindo-babel
+
+services:
+  inkindo-mysql:
+    image: mysql:8.4
+    container_name: inkindo-babel-mysql
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --default-time-zone=+07:00
+      - --max-connections=150
+      - --innodb-buffer-pool-size=256M
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Harap set MYSQL_ROOT_PASSWORD di .env.mysql}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-inkindo_babel_db}
+      MYSQL_USER: ${MYSQL_USER:-inkindo_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Harap set MYSQL_PASSWORD di .env.mysql}
+    ports:
+      # Hanya bind ke localhost (127.0.0.1) untuk isolasi keamanan
+      - "127.0.0.1:${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - inkindo_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$${MYSQL_ROOT_PASSWORD} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - inkindo_internal_net
+
+volumes:
+  inkindo_mysql_data:
+    name: inkindo_mysql_data
+
+networks:
+  inkindo_internal_net:
+    name: inkindo_internal_net
+    internal: false

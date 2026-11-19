@@ -4,12 +4,18 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { getCurrentAdmin, type AuthenticatedAdmin } from "@/lib/auth/server";
 import { deleteHeroImageFile } from "@/lib/storage/hero";
+import { isValidHeroImagePath, isHeroImageReferenced } from "@/lib/security";
+import {
+  runLockedUploadCommit,
+  safeDeleteUnreferencedImage,
+} from "./action-upload-guard";
 
 export interface ActionResult<T = unknown> {
   success: boolean;
   message?: string;
   error?: string;
   data?: T;
+  rollbackToken?: string;
 }
 
 export interface HeroSlideItem {
@@ -28,6 +34,7 @@ export interface HeroSlideItem {
 
 export interface CreateHeroSlideInput {
   imagePath: string;
+  uploadToken?: string;
   imageAlt?: string;
   title?: string;
   description?: string;
@@ -40,6 +47,7 @@ export interface CreateHeroSlideInput {
 export interface UpdateHeroSlideInput {
   id: string;
   imagePath?: string;
+  uploadToken?: string;
   imageAlt?: string;
   title?: string;
   description?: string;
@@ -111,66 +119,79 @@ export async function createHeroSlideAction(
   input: CreateHeroSlideInput
 ): Promise<ActionResult<HeroSlideItem>> {
   try {
-    await verifyActiveAdmin();
+    const admin = await verifyActiveAdmin();
+    const candidateImagePath = sanitizeInput(input.imagePath);
 
-    const imagePath = sanitizeInput(input.imagePath);
-    if (!imagePath || !imagePath.startsWith("/uploads/hero/")) {
-      if (imagePath) await deleteHeroImageFile(imagePath);
-      return { success: false, error: "Gambar slide wajib diunggah." };
-    }
+    return await runLockedUploadCommit<HeroSlideItem>({
+      adminId: admin.id,
+      module: "hero",
+      publicPath: candidateImagePath,
+      uploadToken: input.uploadToken,
+      fallbackError: "Gagal menambahkan slide baru.",
+      operation: async () => {
+        if (!candidateImagePath || !isValidHeroImagePath(candidateImagePath)) {
+          return {
+            success: false,
+            definiteFailure: true,
+            error: "Gambar slide wajib diunggah.",
+          };
+        }
 
-    const title = input.title ? sanitizeInput(input.title) : "Dokumentasi Hero";
-    const description = input.description ? sanitizeInput(input.description) : "Dokumentasi Kegiatan INKINDO BABEL";
-    const imageAlt = input.imageAlt ? sanitizeInput(input.imageAlt) : "Dokumentasi Hero INKINDO BABEL";
-    const linkUrl = input.linkUrl ? sanitizeInput(input.linkUrl) : null;
-    const linkLabel = input.linkLabel ? sanitizeInput(input.linkLabel) : null;
-    const isActive = input.isActive !== undefined ? Boolean(input.isActive) : true;
+        const title = input.title ? sanitizeInput(input.title) : "Dokumentasi Hero";
+        const description = input.description
+          ? sanitizeInput(input.description)
+          : "Dokumentasi Kegiatan INKINDO BABEL";
+        const imageAlt = input.imageAlt
+          ? sanitizeInput(input.imageAlt)
+          : "Dokumentasi Hero INKINDO BABEL";
+        const linkUrl = input.linkUrl ? sanitizeInput(input.linkUrl) : null;
+        const linkLabel = input.linkLabel ? sanitizeInput(input.linkLabel) : null;
+        const isActive = input.isActive !== undefined ? Boolean(input.isActive) : true;
 
-    let slideOrder = input.order;
-    if (slideOrder === undefined || Number.isNaN(slideOrder)) {
-      const maxOrderSlide = await prisma.heroSlide.findFirst({
-        orderBy: { order: "desc" },
-        select: { order: true },
-      });
-      slideOrder = (maxOrderSlide?.order ?? -1) + 1;
-    }
+        let slideOrder = input.order;
+        if (slideOrder === undefined || Number.isNaN(slideOrder)) {
+          const maxOrderSlide = await prisma.heroSlide.findFirst({
+            orderBy: { order: "desc" },
+            select: { order: true },
+          });
+          slideOrder = (maxOrderSlide?.order ?? -1) + 1;
+        }
 
-    const created = await prisma.heroSlide.create({
-      data: {
-        title,
-        description,
-        imagePath,
-        imageAlt,
-        linkUrl,
-        linkLabel,
-        order: slideOrder,
-        isActive,
+        const created = await prisma.heroSlide.create({
+          data: {
+            title,
+            description,
+            imagePath: candidateImagePath,
+            imageAlt,
+            linkUrl,
+            linkLabel,
+            order: slideOrder,
+            isActive,
+          },
+        });
+
+        safeRevalidatePath("/babel-and-adt/hero");
+
+        return {
+          success: true,
+          message: "Hero slide berhasil ditambahkan.",
+          data: {
+            id: created.id,
+            title: created.title,
+            description: created.description,
+            imagePath: created.imagePath,
+            imageAlt: created.imageAlt,
+            linkUrl: created.linkUrl,
+            linkLabel: created.linkLabel,
+            order: created.order,
+            isActive: created.isActive,
+            createdAt: created.createdAt.toISOString(),
+            updatedAt: created.updatedAt.toISOString(),
+          },
+        };
       },
     });
-
-    safeRevalidatePath("/babel-and-adt/hero");
-
-    return {
-      success: true,
-      message: "Hero slide berhasil ditambahkan.",
-      data: {
-        id: created.id,
-        title: created.title,
-        description: created.description,
-        imagePath: created.imagePath,
-        imageAlt: created.imageAlt,
-        linkUrl: created.linkUrl,
-        linkLabel: created.linkLabel,
-        order: created.order,
-        isActive: created.isActive,
-        createdAt: created.createdAt.toISOString(),
-        updatedAt: created.updatedAt.toISOString(),
-      },
-    };
   } catch (err) {
-    if (input.imagePath) {
-      await deleteHeroImageFile(input.imagePath);
-    }
     return {
       success: false,
       error: err instanceof Error ? err.message : "Gagal menambahkan slide baru.",
@@ -182,87 +203,128 @@ export async function updateHeroSlideAction(
   input: UpdateHeroSlideInput
 ): Promise<ActionResult<HeroSlideItem>> {
   try {
-    await verifyActiveAdmin();
+    const admin = await verifyActiveAdmin();
+    const candidateImagePath = input.imagePath ? sanitizeInput(input.imagePath) : null;
 
-    const slideId = sanitizeInput(input.id);
-    if (!slideId) {
-      return { success: false, error: "ID slide tidak valid." };
-    }
-
-    const existing = await prisma.heroSlide.findUnique({
-      where: { id: slideId },
-    });
-    if (!existing) {
-      if (input.imagePath) {
-        await deleteHeroImageFile(input.imagePath);
-      }
-      return { success: false, error: "Slide tidak ditemukan." };
-    }
-
-    const title = input.title !== undefined ? (input.title ? sanitizeInput(input.title) : "") : existing.title;
-    const description = input.description !== undefined ? (input.description ? sanitizeInput(input.description) : "") : existing.description;
-    const imageAlt = input.imageAlt !== undefined ? (input.imageAlt ? sanitizeInput(input.imageAlt) : existing.imageAlt) : existing.imageAlt;
-    const linkUrl = input.linkUrl !== undefined ? (input.linkUrl ? sanitizeInput(input.linkUrl) : null) : existing.linkUrl;
-    const linkLabel = input.linkLabel !== undefined ? (input.linkLabel ? sanitizeInput(input.linkLabel) : null) : existing.linkLabel;
-    const isActive = input.isActive !== undefined ? Boolean(input.isActive) : existing.isActive;
-    const order = input.order !== undefined && !Number.isNaN(input.order) ? Number(input.order) : existing.order;
-
-    let newImagePath = existing.imagePath;
     let oldImagePathToDelete: string | null = null;
+    let updatedSlideId = "";
 
-    if (input.imagePath && input.imagePath !== existing.imagePath) {
-      if (!input.imagePath.startsWith("/uploads/hero/")) {
-        return { success: false, error: "Path gambar tidak valid." };
-      }
-      newImagePath = input.imagePath;
-      oldImagePathToDelete = existing.imagePath;
-    }
+    const result = await runLockedUploadCommit<HeroSlideItem>({
+      adminId: admin.id,
+      module: "hero",
+      publicPath: candidateImagePath,
+      uploadToken: input.uploadToken,
+      fallbackError: "Gagal memperbarui data slide.",
+      operation: async () => {
+        const slideId = sanitizeInput(input.id);
+        if (!slideId) {
+          return { success: false, definiteFailure: true, error: "ID slide tidak valid." };
+        }
 
-    const updated = await prisma.heroSlide.update({
-      where: { id: slideId },
-      data: {
-        title,
-        description,
-        imagePath: newImagePath,
-        imageAlt,
-        linkUrl,
-        linkLabel,
-        isActive,
-        order,
+        const existing = await prisma.heroSlide.findUnique({
+          where: { id: slideId },
+        });
+        if (!existing) {
+          return { success: false, definiteFailure: true, error: "Slide tidak ditemukan." };
+        }
+
+        const title =
+          input.title !== undefined
+            ? input.title
+              ? sanitizeInput(input.title)
+              : ""
+            : existing.title;
+        const description =
+          input.description !== undefined
+            ? input.description
+              ? sanitizeInput(input.description)
+              : ""
+            : existing.description;
+        const imageAlt =
+          input.imageAlt !== undefined
+            ? input.imageAlt
+              ? sanitizeInput(input.imageAlt)
+              : existing.imageAlt
+            : existing.imageAlt;
+        const linkUrl =
+          input.linkUrl !== undefined
+            ? input.linkUrl
+              ? sanitizeInput(input.linkUrl)
+              : null
+            : existing.linkUrl;
+        const linkLabel =
+          input.linkLabel !== undefined
+            ? input.linkLabel
+              ? sanitizeInput(input.linkLabel)
+              : null
+            : existing.linkLabel;
+        const isActive =
+          input.isActive !== undefined ? Boolean(input.isActive) : existing.isActive;
+        const order =
+          input.order !== undefined && !Number.isNaN(input.order)
+            ? Number(input.order)
+            : existing.order;
+
+        let newImagePath = existing.imagePath;
+        if (candidateImagePath && candidateImagePath !== existing.imagePath) {
+          if (!isValidHeroImagePath(candidateImagePath)) {
+            return { success: false, definiteFailure: true, error: "Path gambar tidak valid." };
+          }
+          newImagePath = candidateImagePath;
+          oldImagePathToDelete = existing.imagePath;
+        }
+
+        const updated = await prisma.heroSlide.update({
+          where: { id: slideId },
+          data: {
+            title,
+            description,
+            imagePath: newImagePath,
+            imageAlt,
+            linkUrl,
+            linkLabel,
+            isActive,
+            order,
+          },
+        });
+
+        updatedSlideId = slideId;
+        return {
+          success: true,
+          message: "Data slide berhasil diperbarui.",
+          data: {
+            id: updated.id,
+            title: updated.title,
+            description: updated.description,
+            imagePath: updated.imagePath,
+            imageAlt: updated.imageAlt,
+            linkUrl: updated.linkUrl,
+            linkLabel: updated.linkLabel,
+            order: updated.order,
+            isActive: updated.isActive,
+            createdAt: updated.createdAt.toISOString(),
+            updatedAt: updated.updatedAt.toISOString(),
+          },
+        };
       },
     });
 
-    if (oldImagePathToDelete) {
-      const isShared = await prisma.heroSlide.findFirst({
-        where: {
-          imagePath: oldImagePathToDelete,
-          id: { not: slideId },
-        },
+    if (!result.success) {
+      return result;
+    }
+
+    if (oldImagePathToDelete && isValidHeroImagePath(oldImagePathToDelete)) {
+      await safeDeleteUnreferencedImage({
+        publicPath: oldImagePathToDelete,
+        isReferenced: (p) =>
+          isHeroImageReferenced(p, { prisma, excludeSlideId: updatedSlideId }),
+        deleteFile: deleteHeroImageFile,
+        logLabel: "Gagal membersihkan berkas slide hero lama:",
       });
-      if (!isShared) {
-        await deleteHeroImageFile(oldImagePathToDelete);
-      }
     }
 
     safeRevalidatePath("/babel-and-adt/hero");
-
-    return {
-      success: true,
-      message: "Data slide berhasil diperbarui.",
-      data: {
-        id: updated.id,
-        title: updated.title,
-        description: updated.description,
-        imagePath: updated.imagePath,
-        imageAlt: updated.imageAlt,
-        linkUrl: updated.linkUrl,
-        linkLabel: updated.linkLabel,
-        order: updated.order,
-        isActive: updated.isActive,
-        createdAt: updated.createdAt.toISOString(),
-        updatedAt: updated.updatedAt.toISOString(),
-      },
-    };
+    return result;
   } catch (err) {
     return {
       success: false,
@@ -374,11 +436,13 @@ export async function deleteHeroSlideAction(slideId: string): Promise<ActionResu
 
     await prisma.heroSlide.delete({ where: { id } });
 
-    const isShared = await prisma.heroSlide.findFirst({
-      where: { imagePath: existing.imagePath },
-    });
-    if (!isShared) {
-      await deleteHeroImageFile(existing.imagePath);
+    if (existing.imagePath && isValidHeroImagePath(existing.imagePath)) {
+      await safeDeleteUnreferencedImage({
+        publicPath: existing.imagePath,
+        isReferenced: (p) => isHeroImageReferenced(p, { prisma }),
+        deleteFile: deleteHeroImageFile,
+        logLabel: "Gagal membersihkan berkas slide hero setelah penghapusan record:",
+      });
     }
 
     const remainingSlides = await prisma.heroSlide.findMany({

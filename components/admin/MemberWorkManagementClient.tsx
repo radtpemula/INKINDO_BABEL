@@ -6,6 +6,21 @@ import {
   AdminDashboardShell,
   type AdminProfile,
 } from "@/components/admin";
+import {
+  executeDeferredSubmit,
+  type ClientImageValidationMessages,
+  type UploadRequestConfig,
+} from "./deferred-image-upload";
+import {
+  cleanupAbandonedPendingUpload,
+  createPendingUploadRecord,
+  defaultClientOrphanReporter,
+  resetPendingUploadForRetry,
+  transitionPendingUploadOutcome,
+  type PendingUploadRecord,
+} from "./pending-upload-cleanup";
+import { useDeferredImageUpload } from "./use-deferred-image-upload";
+import { rollbackPendingUploadAction } from "@/lib/admin/upload-rollback-action";
 import { logoutAdminAction } from "@/lib/auth/actions";
 import {
   type MemberWorkItem,
@@ -81,6 +96,18 @@ const INITIAL_FORM_STATE: FormState = {
   isActive: true,
 };
 
+const WORK_IMAGE_MESSAGES: ClientImageValidationMessages = {
+  emptyFile: "Ukuran berkas gambar tidak boleh kosong.",
+  oversizeFile: "Ukuran gambar melebihi batas maksimum 5 MiB.",
+  invalidType: "Format berkas harus JPEG, PNG, atau WebP.",
+};
+
+const WORK_UPLOAD_CONFIG: UploadRequestConfig = {
+  endpoint: "/api/admin/member-work-upload",
+  defaultError: "Gagal mengunggah berkas gambar.",
+  networkError: "Terjadi kesalahan jaringan saat mengunggah gambar.",
+};
+
 export function MemberWorkManagementClient({
   profile,
   initialWorks,
@@ -106,9 +133,23 @@ export function MemberWorkManagementClient({
   const [initialSnapshot, setInitialSnapshot] = useState<string>("");
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
-  const [isUploadingImage, setIsUploadingImage] = useState(false);
-  const [isSubmittingForm, setIsSubmittingForm] = useState(false);
+  const {
+    selectedFile: selectedImageFile,
+    previewUrl: previewImageUrl,
+    selection: imageSelection,
+    isUploading: isUploadingImage,
+    isBusy: isModalBusy,
+    setIsUploading: setIsUploadingImage,
+    setIsSubmitting: setIsSubmittingForm,
+    submitLockRef,
+    selectFile: selectWorkImageFile,
+    clearSelection: clearWorkImageSelection,
+  } = useDeferredImageUpload();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingUploadRef = useRef<PendingUploadRecord | null>(null);
+  const [isCleaningUpUpload, setIsCleaningUpUpload] = useState(false);
+  const isInteractionLocked = isModalBusy || isCleaningUpUpload;
+  const activeImagePreview = previewImageUrl ?? formState.imagePath;
 
   const [deleteTarget, setDeleteTarget] = useState<MemberWorkItem | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -189,7 +230,19 @@ export function MemberWorkManagementClient({
     }
   };
 
+  const abandonPendingUpload = async (pending: PendingUploadRecord | null): Promise<void> => {
+    if (!pending) return;
+    setIsCleaningUpUpload(true);
+    try {
+      await cleanupAbandonedPendingUpload(pending, rollbackPendingUploadAction);
+    } finally {
+      setIsCleaningUpUpload(false);
+    }
+  };
+
   const handleOpenCreateModal = () => {
+    pendingUploadRef.current = null;
+    clearWorkImageSelection();
     setModalMode("create");
     setEditingWork(null);
     const freshState: FormState = {
@@ -206,6 +259,8 @@ export function MemberWorkManagementClient({
   };
 
   const handleOpenEditModal = (work: MemberWorkItem) => {
+    pendingUploadRef.current = null;
+    clearWorkImageSelection();
     setModalMode("edit");
     setEditingWork(work);
 
@@ -241,72 +296,69 @@ export function MemberWorkManagementClient({
     }
   };
 
-  const handleCloseModal = () => {
-    const isDirty = JSON.stringify(formState) !== initialSnapshot;
+  const handleCloseModal = async () => {
+    if (isInteractionLocked || submitLockRef.current) {
+      return;
+    }
+    const isDirty = selectedImageFile !== null || JSON.stringify(formState) !== initialSnapshot;
     if (isDirty) {
       if (!window.confirm("Perubahan formulir belum disimpan. Tutup jendela?")) {
         return;
       }
     }
-    setIsModalOpen(false);
-    setEditingWork(null);
-    setFormErrors({});
+    const pendingToCleanup = pendingUploadRef.current;
+    pendingUploadRef.current = null;
+    submitLockRef.current = true;
+    try {
+      await abandonPendingUpload(pendingToCleanup);
+    } finally {
+      submitLockRef.current = false;
+      clearWorkImageSelection();
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+      setIsModalOpen(false);
+      setEditingWork(null);
+      setFormErrors({});
+    }
   };
 
-  const handleImageFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (isInteractionLocked || submitLockRef.current) {
+      return;
+    }
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 5 * 1024 * 1024) {
-      showNotification("error", "Ukuran gambar melebihi batas maksimum 5 MiB.");
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      return;
+    const validationError = selectWorkImageFile(file, WORK_IMAGE_MESSAGES);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
     }
-
-    const validMimes = ["image/jpeg", "image/png", "image/webp"];
-    if (!validMimes.includes(file.type)) {
-      showNotification("error", "Format berkas harus JPEG, PNG, atau WebP.");
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      return;
-    }
-
-    setIsUploadingImage(true);
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-
-      const res = await fetch("/api/admin/member-work-upload", {
-        method: "POST",
-        body: formData,
-      });
-
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        showNotification("error", json.error || "Gagal mengunggah berkas gambar.");
-        if (fileInputRef.current) fileInputRef.current.value = "";
-        return;
-      }
-
-      const uploadedPath = json.path || json.data?.publicPath;
-      setFormState((prev) => ({
-        ...prev,
-        imagePath: uploadedPath,
-      }));
-      showNotification("success", "Gambar karya anggota berhasil diunggah.");
-    } catch {
-      showNotification("error", "Terjadi kesalahan jaringan saat mengunggah gambar.");
-    } finally {
-      setIsUploadingImage(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+    if (validationError) {
+      showNotification("error", validationError);
     }
   };
 
-  const handleRemoveImage = () => {
+  const handleRemoveImage = async () => {
+    if (isInteractionLocked || submitLockRef.current) {
+      return;
+    }
+    const pendingToCleanup = pendingUploadRef.current;
+    pendingUploadRef.current = null;
+    clearWorkImageSelection();
     setFormState((prev) => ({
       ...prev,
       imagePath: null,
     }));
     if (fileInputRef.current) fileInputRef.current.value = "";
+    if (pendingToCleanup) {
+      submitLockRef.current = true;
+      try {
+        await abandonPendingUpload(pendingToCleanup);
+      } finally {
+        submitLockRef.current = false;
+      }
+    }
   };
 
   const validateForm = (): boolean => {
@@ -359,72 +411,143 @@ export function MemberWorkManagementClient({
 
   const handleSubmitForm = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (!validateForm()) {
-      showNotification("error", "Periksa kembali isian formulir yang ditandai merah.");
+    if (isCleaningUpUpload) {
       return;
     }
-
-    setIsSubmittingForm(true);
 
     const finalCategory =
       formState.category === "__custom__"
         ? formState.customCategory.trim()
         : formState.category.trim();
 
-    try {
-      if (modalMode === "create") {
-        const res = await createMemberWorkAction({
-          title: formState.title.trim(),
-          slug: formState.slug.trim() || undefined,
-          category: finalCategory,
-          company: formState.company.trim(),
-          year: formState.year.trim(),
-          client: formState.client.trim() || null,
-          description: formState.description.trim() || null,
-          imagePath: formState.imagePath,
-          imageAlt: formState.imageAlt.trim() || null,
-          isFeatured: formState.isFeatured,
-          isActive: formState.isActive,
-        });
-
-        if (res.success && res.data) {
-          setWorks((prev) => [...prev, res.data!].sort((a, b) => a.order - b.order));
-          setIsModalOpen(false);
-          showNotification("success", `Karya "${res.data.title}" berhasil ditambahkan.`);
-        } else {
-          showNotification("error", res.error || "Gagal menambahkan karya anggota.");
+    const outcome = await executeDeferredSubmit({
+      lockRef: submitLockRef,
+      selection: imageSelection,
+      persistedImagePath: formState.imagePath,
+      pendingUploadToken: pendingUploadRef.current?.uploadToken,
+      validateForm: () => {
+        const valid = validateForm();
+        if (!valid) {
+          showNotification("error", "Periksa kembali isian formulir yang ditandai merah.");
         }
-      } else if (modalMode === "edit" && editingWork) {
-        const res = await updateMemberWorkAction({
-          id: editingWork.id,
-          title: formState.title.trim(),
-          slug: formState.slug.trim() || undefined,
-          category: finalCategory,
-          company: formState.company.trim(),
-          year: formState.year.trim(),
-          client: formState.client.trim() || null,
-          description: formState.description.trim() || null,
-          imagePath: formState.imagePath,
-          imageAlt: formState.imageAlt.trim() || null,
-          isFeatured: formState.isFeatured,
-          isActive: formState.isActive,
-        });
+        return valid;
+      },
+      uploadConfig: WORK_UPLOAD_CONFIG,
+      onUploadPhaseChange: setIsUploadingImage,
+      onSubmitPhaseChange: setIsSubmittingForm,
+      onImageUploaded: (publicPath, uploadToken) => {
+        const previousPending = pendingUploadRef.current;
+        pendingUploadRef.current = createPendingUploadRecord(
+          "member-works",
+          publicPath,
+          uploadToken
+        );
+        if (previousPending && previousPending.publicPath !== publicPath) {
+          void cleanupAbandonedPendingUpload(previousPending, rollbackPendingUploadAction);
+        }
+        clearWorkImageSelection();
+        setFormState((prev) => ({
+          ...prev,
+          imagePath: publicPath,
+        }));
+      },
+      onSaveAttemptStart: () => {
+        pendingUploadRef.current = resetPendingUploadForRetry(pendingUploadRef.current);
+      },
+      saveRecord: async (resolvedImagePath, uploadToken) => {
+        if (modalMode === "create") {
+          return createMemberWorkAction({
+            title: formState.title.trim(),
+            slug: formState.slug.trim() || undefined,
+            category: finalCategory,
+            company: formState.company.trim(),
+            year: formState.year.trim(),
+            client: formState.client.trim() || null,
+            description: formState.description.trim() || null,
+            imagePath: resolvedImagePath,
+            uploadToken,
+            imageAlt: formState.imageAlt.trim() || null,
+            isFeatured: formState.isFeatured,
+            isActive: formState.isActive,
+          });
+        }
+        if (modalMode === "edit" && editingWork) {
+          return updateMemberWorkAction({
+            id: editingWork.id,
+            title: formState.title.trim(),
+            slug: formState.slug.trim() || undefined,
+            category: finalCategory,
+            company: formState.company.trim(),
+            year: formState.year.trim(),
+            client: formState.client.trim() || null,
+            description: formState.description.trim() || null,
+            imagePath: resolvedImagePath,
+            uploadToken,
+            imageAlt: formState.imageAlt.trim() || null,
+            isFeatured: formState.isFeatured,
+            isActive: formState.isActive,
+          });
+        }
+        return { success: false, error: "Mode formulir tidak valid." };
+      },
+    });
 
-        if (res.success && res.data) {
+    switch (outcome.status) {
+      case "locked":
+      case "validation_failed":
+        return;
+      case "upload_failed":
+        showNotification("error", outcome.error);
+        return;
+      case "save_failed":
+        pendingUploadRef.current = transitionPendingUploadOutcome(
+          pendingUploadRef.current,
+          "definite_failure",
+          outcome.rollbackToken
+        );
+        showNotification(
+          "error",
+          outcome.error ||
+            (modalMode === "create"
+              ? "Gagal menambahkan karya anggota."
+              : "Gagal memperbarui karya anggota.")
+        );
+        return;
+      case "unexpected_error":
+        pendingUploadRef.current = transitionPendingUploadOutcome(
+          pendingUploadRef.current,
+          "unknown"
+        );
+        if (outcome.saveAttempted && outcome.resolvedImagePath) {
+          defaultClientOrphanReporter({
+            module: "member-works",
+            publicPath: outcome.resolvedImagePath,
+            reason: "unknown_save_outcome",
+            timestamp: new Date().toISOString(),
+          });
+        }
+        showNotification(
+          "error",
+          "Koneksi terputus atau status penyimpanan tidak diketahui. Berkas gambar tetap dipertahankan agar data aman."
+        );
+        return;
+      case "succeeded":
+        pendingUploadRef.current = null;
+        if (modalMode === "create") {
+          setWorks((prev) => [...prev, outcome.data].sort((a, b) => a.order - b.order));
+          showNotification("success", `Karya "${outcome.data.title}" berhasil ditambahkan.`);
+        } else if (editingWork) {
           setWorks((prev) =>
-            prev.map((w) => (w.id === editingWork.id ? res.data! : w)).sort((a, b) => a.order - b.order)
+            prev
+              .map((w) => (w.id === editingWork.id ? outcome.data : w))
+              .sort((a, b) => a.order - b.order)
           );
-          setIsModalOpen(false);
-          showNotification("success", `Karya "${res.data.title}" berhasil diperbarui.`);
-        } else {
-          showNotification("error", res.error || "Gagal memperbarui karya anggota.");
+          showNotification("success", `Karya "${outcome.data.title}" berhasil diperbarui.`);
         }
-      }
-    } catch {
-      showNotification("error", "Terjadi kesalahan tidak terduga saat menyimpan data.");
-    } finally {
-      setIsSubmittingForm(false);
+        clearWorkImageSelection();
+        setIsModalOpen(false);
+        setEditingWork(null);
+        return;
     }
   };
 
@@ -925,7 +1048,8 @@ export function MemberWorkManagementClient({
               <button
                 type="button"
                 onClick={handleCloseModal}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors"
+                disabled={isInteractionLocked}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors disabled:opacity-50"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1078,11 +1202,11 @@ export function MemberWorkManagementClient({
                   Foto / Gambar Dokumentasi Proyek (Opsional)
                 </label>
                 <div className="border border-slate-700/80 rounded-xl p-4 bg-[#0F172A] space-y-3">
-                  {formState.imagePath ? (
+                  {activeImagePreview ? (
                     <div className="flex items-center gap-4">
                       <div className="w-24 h-16 rounded-lg bg-[#1E293B] border border-slate-700 flex items-center justify-center overflow-hidden shrink-0">
                         <Image
-                          src={formState.imagePath}
+                          src={activeImagePreview}
                           alt="Preview gambar karya"
                           width={96}
                           height={64}
@@ -1091,14 +1215,18 @@ export function MemberWorkManagementClient({
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-xs font-medium text-slate-300 truncate">
-                          {formState.imagePath}
+                          {selectedImageFile ? selectedImageFile.name : formState.imagePath}
                         </p>
-                        <p className="text-[11px] text-emerald-400 mt-0.5">Gambar siap disimpan</p>
+                        <p className="text-[11px] text-emerald-400 mt-0.5">
+                          {selectedImageFile
+                            ? "Gambar dipilih (akan diunggah saat disimpan)"
+                            : "Gambar siap disimpan"}
+                        </p>
                         <div className="flex gap-2 mt-2">
                           <button
                             type="button"
                             onClick={() => fileInputRef.current?.click()}
-                            disabled={isUploadingImage}
+                            disabled={isInteractionLocked}
                             className="text-xs text-[#D97706] hover:underline disabled:opacity-50"
                           >
                             Ganti Gambar
@@ -1107,7 +1235,7 @@ export function MemberWorkManagementClient({
                           <button
                             type="button"
                             onClick={handleRemoveImage}
-                            disabled={isUploadingImage}
+                            disabled={isInteractionLocked}
                             className="text-xs text-rose-400 hover:underline disabled:opacity-50"
                           >
                             Hapus Gambar
@@ -1123,7 +1251,7 @@ export function MemberWorkManagementClient({
                       <button
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
-                        disabled={isUploadingImage}
+                        disabled={isInteractionLocked}
                         className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-lg text-xs font-semibold text-slate-200 transition-colors disabled:opacity-50"
                       >
                         {isUploadingImage ? (
@@ -1145,6 +1273,7 @@ export function MemberWorkManagementClient({
                     ref={fileInputRef}
                     type="file"
                     accept="image/jpeg,image/png,image/webp"
+                    disabled={isInteractionLocked}
                     onChange={handleImageFileSelect}
                     className="hidden"
                   />
@@ -1206,20 +1335,20 @@ export function MemberWorkManagementClient({
                 <button
                   type="button"
                   onClick={handleCloseModal}
-                  disabled={isSubmittingForm || isUploadingImage}
+                  disabled={isInteractionLocked}
                   className="px-4 py-2 rounded-lg text-sm font-semibold text-slate-300 hover:bg-slate-800 transition-colors disabled:opacity-50"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmittingForm || isUploadingImage}
+                  disabled={isInteractionLocked}
                   className="inline-flex items-center gap-2 bg-[#D97706] hover:bg-[#B45309] text-white px-5 py-2 rounded-lg text-sm font-semibold transition-colors disabled:opacity-50 shadow-sm"
                 >
-                  {isSubmittingForm ? (
+                  {isModalBusy ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Menyimpan...</span>
+                      <span>{isUploadingImage ? "Mengunggah Gambar..." : "Menyimpan..."}</span>
                     </>
                   ) : (
                     <span>{modalMode === "create" ? "Simpan Karya" : "Simpan Perubahan"}</span>

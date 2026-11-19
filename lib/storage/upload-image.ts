@@ -3,24 +3,24 @@ import path from "node:path";
 import crypto from "node:crypto";
 import {
   MAX_IMAGE_SIZE_BYTES,
-  validateImageMagicBytes,
   type SupportedImageType,
 } from "./image-validation";
+import { processAndValidateImageBuffer } from "./image-processor";
 
 export interface SaveImageOptions {
-  buffer: Buffer;
-  subdirectory: "partners" | "member-works";
-  filePrefix: "partner" | "work";
-  maxSizeBytes?: number;
+  readonly buffer: Buffer;
+  readonly subdirectory: "partners" | "member-works";
+  readonly filePrefix: "partner" | "work";
+  readonly maxSizeBytes?: number;
 }
 
 export interface SaveImageResult {
-  success: boolean;
-  publicPath?: string;
-  filename?: string;
-  sizeBytes?: number;
-  mimeType?: SupportedImageType;
-  error?: string;
+  readonly success: boolean;
+  readonly publicPath?: string;
+  readonly filename?: string;
+  readonly sizeBytes?: number;
+  readonly mimeType?: SupportedImageType;
+  readonly error?: string;
 }
 
 export async function saveImageToDirectory(
@@ -29,31 +29,22 @@ export async function saveImageToDirectory(
   const { buffer, subdirectory, filePrefix, maxSizeBytes = MAX_IMAGE_SIZE_BYTES } =
     options;
 
-  if (!buffer || buffer.length === 0) {
+  const processed = await processAndValidateImageBuffer(buffer, maxSizeBytes);
+  if (
+    !processed.success ||
+    !processed.buffer ||
+    !processed.extension ||
+    !processed.mimeType
+  ) {
     return {
       success: false,
-      error: "Berkas gambar kosong.",
-    };
-  }
-
-  if (buffer.length > maxSizeBytes) {
-    return {
-      success: false,
-      error: "Ukuran berkas melebihi batas maksimum 5 MB.",
-    };
-  }
-
-  const validation = validateImageMagicBytes(buffer);
-  if (!validation.isValid || !validation.extension || !validation.mimeType) {
-    return {
-      success: false,
-      error: validation.error || "Validasi format gambar gagal.",
+      error: processed.error || "Validasi format gambar gagal.",
     };
   }
 
   const uniqueId = crypto.randomUUID().replace(/-/g, "");
   const timestamp = Date.now();
-  const safeFilename = `${filePrefix}-${timestamp}-${uniqueId}.${validation.extension}`;
+  const safeFilename = `${filePrefix}-${timestamp}-${uniqueId}.${processed.extension}`;
 
   const uploadsDir = path.join(process.cwd(), "public", "uploads", subdirectory);
   const tempPath = path.join(uploadsDir, `.tmp-${safeFilename}`);
@@ -69,29 +60,25 @@ export async function saveImageToDirectory(
 
   try {
     await fs.mkdir(uploadsDir, { recursive: true });
-    await fs.writeFile(tempPath, buffer);
+    await fs.writeFile(tempPath, processed.buffer);
     await fs.rename(tempPath, finalPath);
 
     return {
       success: true,
       publicPath: `/uploads/${subdirectory}/${safeFilename}`,
       filename: safeFilename,
-      sizeBytes: buffer.length,
-      mimeType: validation.mimeType,
+      sizeBytes: processed.sizeBytes,
+      mimeType: processed.mimeType,
     };
-  } catch (err) {
+  } catch {
     try {
       await fs.unlink(tempPath);
     } catch {
       // Temp file cleanup failure ignored
     }
-    const errorMsg =
-      err instanceof Error
-        ? err.message
-        : "Gagal menyimpan berkas ke direktori penyimpanan.";
     return {
       success: false,
-      error: errorMsg,
+      error: "Gagal menyimpan berkas ke direktori penyimpanan.",
     };
   }
 }
@@ -110,7 +97,18 @@ export async function deleteImageFromDirectory(
     return false;
   }
 
-  const filename = path.basename(normalized);
+  const prefix = normalized.startsWith(expectedPrefix) ? expectedPrefix : altPrefix;
+  const relativeSuffix = normalized.slice(prefix.length);
+  if (
+    !relativeSuffix ||
+    relativeSuffix.includes("/") ||
+    relativeSuffix.includes("\\") ||
+    relativeSuffix.includes("..")
+  ) {
+    return false;
+  }
+
+  const filename = path.basename(relativeSuffix);
   if (!filename || filename === "." || filename === "..") return false;
 
   const uploadsDir = path.join(process.cwd(), "public", "uploads", subdirectory);

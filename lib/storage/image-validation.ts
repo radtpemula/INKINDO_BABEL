@@ -1,12 +1,13 @@
 export const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
 
 export type SupportedImageType = "image/jpeg" | "image/png" | "image/webp";
+export type SupportedImageExtension = "jpg" | "png" | "webp";
 
 export interface ImageValidationResult {
-  isValid: boolean;
-  mimeType?: SupportedImageType;
-  extension?: "jpg" | "png" | "webp";
-  error?: string;
+  readonly isValid: boolean;
+  readonly mimeType?: SupportedImageType;
+  readonly extension?: SupportedImageExtension;
+  readonly error?: string;
 }
 
 export function validateImageMagicBytes(buffer: Buffer): ImageValidationResult {
@@ -65,4 +66,25 @@ export function validateImageMagicBytes(buffer: Buffer): ImageValidationResult {
     isValid: false,
     error: "Format berkas tidak diizinkan. Hanya format JPEG, PNG, dan WebP yang diterima.",
   };
+}
+
+export function validateImageBuffer(
+  buffer: Buffer,
+  maxSizeBytes: number = MAX_IMAGE_SIZE_BYTES
+): ImageValidationResult {
+  if (!buffer || buffer.length === 0) {
+    return {
+      isValid: false,
+      error: "Berkas gambar kosong.",
+    };
+  }
+
+  if (buffer.length > maxSizeBytes) {
+    return {
+      isValid: false,
+      error: "Ukuran berkas melebihi batas maksimum 5 MB.",
+    };
+  }
+
+  return validateImageMagicBytes(buffer);
 }

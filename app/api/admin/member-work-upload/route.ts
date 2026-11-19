@@ -5,13 +5,16 @@ import {
   saveMemberWorkImage,
   MAX_MEMBER_WORK_IMAGE_SIZE_BYTES,
 } from "@/lib/storage/member-work";
+import { checkUploadRateLimit, getClientIdentifier } from "@/lib/security/rate-limit";
+import { createUploadReceiptToken } from "@/lib/security/upload-receipt";
 
 export async function POST(request: NextRequest | Request) {
   try {
     let tokenFromCookie: string | null = null;
     if ("cookies" in request && typeof request.cookies?.get === "function") {
       tokenFromCookie = request.cookies.get(SESSION_COOKIE_NAME)?.value ?? null;
-    } else {
+    }
+    if (!tokenFromCookie && typeof request.headers?.get === "function") {
       const cookieHeader = request.headers.get("cookie") || "";
       const match = cookieHeader.match(
         new RegExp(`(?:^|;\\s*)${SESSION_COOKIE_NAME}=([^;]*)`)
@@ -38,6 +41,24 @@ export async function POST(request: NextRequest | Request) {
           error: "Sesi tidak valid atau telah berakhir. Silakan login kembali.",
         },
         { status: 401 }
+      );
+    }
+
+    const rateLimit = checkUploadRateLimit(
+      getClientIdentifier(request, auth.user.id)
+    );
+    if (!rateLimit.isAllowed) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Terlalu banyak permintaan unggah gambar. Silakan coba lagi nanti.",
+        },
+        {
+          status: 429,
+          headers: {
+            "Retry-After": String(rateLimit.retryAfterSeconds),
+          },
+        }
       );
     }
 
@@ -78,7 +99,7 @@ export async function POST(request: NextRequest | Request) {
     const buffer = Buffer.from(arrayBuffer);
 
     const saveResult = await saveMemberWorkImage(buffer);
-    if (!saveResult.success) {
+    if (!saveResult.success || !saveResult.publicPath) {
       return NextResponse.json(
         {
           success: false,
@@ -90,6 +111,12 @@ export async function POST(request: NextRequest | Request) {
       );
     }
 
+    const uploadToken = await createUploadReceiptToken({
+      adminId: auth.user.id,
+      module: "member-works",
+      publicPath: saveResult.publicPath,
+    });
+
     return NextResponse.json(
       {
         success: true,
@@ -100,19 +127,16 @@ export async function POST(request: NextRequest | Request) {
           filename: saveResult.filename,
           sizeBytes: saveResult.sizeBytes,
           mimeType: saveResult.mimeType,
+          uploadToken,
         },
       },
       { status: 201 }
     );
-  } catch (err) {
-    const errorMsg =
-      err instanceof Error
-        ? err.message
-        : "Terjadi kesalahan internal pada server.";
+  } catch {
     return NextResponse.json(
       {
         success: false,
-        error: errorMsg,
+        error: "Terjadi kesalahan internal pada server.",
       },
       { status: 500 }
     );

@@ -35,6 +35,25 @@ import {
   updateHeroCardsAction,
   restoreHeroCardsDefaultAction,
 } from "@/lib/admin/hero-settings-actions";
+import {
+  executeDeferredSubmit,
+  type ClientImageValidationMessages,
+} from "./deferred-image-upload";
+import { useDeferredImageUpload } from "./use-deferred-image-upload";
+import {
+  cleanupAbandonedPendingUpload,
+  createPendingUploadRecord,
+  resetPendingUploadForRetry,
+  transitionPendingUploadOutcome,
+  type PendingUploadRecord,
+} from "./pending-upload-cleanup";
+import { rollbackPendingUploadAction } from "@/lib/admin/upload-rollback-action";
+
+const HERO_BG_VALIDATION_MESSAGES: ClientImageValidationMessages = {
+  emptyFile: "Ukuran berkas gambar kosong.",
+  oversizeFile: "Ukuran berkas melebihi batas maksimum 5 MB.",
+  invalidType: "Format berkas harus JPEG, PNG, atau WebP.",
+};
 
 interface HeroSettingsClientProps {
   profile: AdminProfile;
@@ -49,11 +68,31 @@ export function HeroSettingsClient({
   const [bgImage, setBgImage] = useState<string>(
     initialSettings.background.backgroundImagePath || ""
   );
-  const [selectedBgFile, setSelectedBgFile] = useState<File | null>(null);
-  const [previewBgUrl, setPreviewBgUrl] = useState<string | null>(null);
-  const [isUploadingBg, setIsUploadingBg] = useState(false);
+  const [pendingRetryBgPath, setPendingRetryBgPath] = useState<string | null>(null);
+  const bgUpload = useDeferredImageUpload();
+  const pendingBgUploadRef = useRef<PendingUploadRecord | null>(null);
   const [isRestoringBg, setIsRestoringBg] = useState(false);
+  const [isCleaningUpBg, setIsCleaningUpBg] = useState(false);
   const bgFileInputRef = useRef<HTMLInputElement | null>(null);
+  const isBgBusy = bgUpload.isBusy || isRestoringBg || isCleaningUpBg;
+
+  const resetBgFileInput = () => {
+    if (bgFileInputRef.current) {
+      bgFileInputRef.current.value = "";
+    }
+  };
+
+  const abandonPendingBgUpload = async () => {
+    const pending = pendingBgUploadRef.current;
+    if (!pending) return;
+    pendingBgUploadRef.current = null;
+    setIsCleaningUpBg(true);
+    try {
+      await cleanupAbandonedPendingUpload(pending, rollbackPendingUploadAction);
+    } finally {
+      setIsCleaningUpBg(false);
+    }
+  };
 
   // 2. State Content
   const [content, setContent] = useState(initialSettings.content);
@@ -84,101 +123,141 @@ export function HeroSettingsClient({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 5 * 1024 * 1024) {
-      showAlert("error", "Ukuran berkas melebihi batas maksimum 5 MB.");
-      return;
+    const validationError = bgUpload.selectFile(file, HERO_BG_VALIDATION_MESSAGES);
+    if (validationError) {
+      showAlert("error", validationError);
+      resetBgFileInput();
     }
-
-    const validTypes = ["image/jpeg", "image/png", "image/webp"];
-    if (!validTypes.includes(file.type)) {
-      showAlert("error", "Format berkas harus JPEG, PNG, atau WebP.");
-      return;
-    }
-
-    setSelectedBgFile(file);
-    const objectUrl = URL.createObjectURL(file);
-    setPreviewBgUrl(objectUrl);
   };
 
   // Handler Simpan Background
   const handleSaveBackground = async () => {
-    if (!selectedBgFile) {
-      showAlert("error", "Pilih berkas gambar baru terlebih dahulu untuk disimpan.");
-      return;
-    }
-
-    setIsUploadingBg(true);
+    if (isRestoringBg || isCleaningUpBg) return;
     setAlert(null);
 
-    try {
-      // 1. Upload file ke endpoint /api/admin/hero-upload
-      const formData = new FormData();
-      formData.append("file", selectedBgFile);
+    const outcome = await executeDeferredSubmit({
+      lockRef: bgUpload.submitLockRef,
+      selection: bgUpload.selection,
+      persistedImagePath: pendingRetryBgPath,
+      pendingUploadToken: pendingBgUploadRef.current?.uploadToken,
+      validateForm: () => {
+        if (!bgUpload.selectedFile && !pendingRetryBgPath) {
+          showAlert("error", "Pilih berkas gambar baru terlebih dahulu untuk disimpan.");
+          return false;
+        }
+        return true;
+      },
+      uploadConfig: {
+        endpoint: "/api/admin/hero-upload",
+        defaultError: "Gagal mengunggah berkas gambar.",
+        networkError: "Terjadi kesalahan saat mengunggah gambar background.",
+      },
+      onUploadPhaseChange: bgUpload.setIsUploading,
+      onSubmitPhaseChange: bgUpload.setIsSubmitting,
+      onImageUploaded: (publicPath, uploadToken) => {
+        const previousPending = pendingBgUploadRef.current;
+        if (previousPending && previousPending.publicPath !== publicPath) {
+          void cleanupAbandonedPendingUpload(
+            previousPending,
+            rollbackPendingUploadAction
+          );
+        }
+        setPendingRetryBgPath(publicPath);
+        bgUpload.clearSelection();
+        resetBgFileInput();
+        pendingBgUploadRef.current = createPendingUploadRecord(
+          "hero",
+          publicPath,
+          uploadToken
+        );
+      },
+      onSaveAttemptStart: () => {
+        pendingBgUploadRef.current = resetPendingUploadForRetry(
+          pendingBgUploadRef.current
+        );
+      },
+      saveRecord: async (resolvedPath, uploadToken) => {
+        const res = await updateHeroBackgroundAction({
+          backgroundImagePath: resolvedPath ?? "",
+          uploadToken,
+        });
+        return {
+          success: res.success,
+          data: res.message || "Background Hero berhasil diperbarui.",
+          error: res.error,
+          rollbackToken: res.rollbackToken,
+        };
+      },
+    });
 
-      const uploadRes = await fetch("/api/admin/hero-upload", {
-        method: "POST",
-        body: formData,
-      });
-
-      const uploadData = await uploadRes.json();
-      if (!uploadRes.ok || !uploadData.success) {
-        throw new Error(uploadData.error || "Gagal mengunggah berkas gambar.");
+    switch (outcome.status) {
+      case "locked":
+      case "validation_failed":
+        return;
+      case "upload_failed":
+        showAlert("error", outcome.error);
+        return;
+      case "save_failed":
+        pendingBgUploadRef.current = transitionPendingUploadOutcome(
+          pendingBgUploadRef.current,
+          "definite_failure",
+          outcome.rollbackToken
+        );
+        showAlert("error", outcome.error || "Gagal menyimpan pengaturan background.");
+        return;
+      case "unexpected_error":
+        if (outcome.saveAttempted) {
+          pendingBgUploadRef.current = transitionPendingUploadOutcome(
+            pendingBgUploadRef.current,
+            "unknown"
+          );
+          showAlert(
+            "error",
+            "Terjadi gangguan saat menyimpan background. Muat ulang halaman untuk memastikan status terbaru."
+          );
+        } else {
+          showAlert("error", "Terjadi kesalahan saat menyimpan background.");
+        }
+        return;
+      case "succeeded":
+        pendingBgUploadRef.current = null;
+        setPendingRetryBgPath(null);
+        if (outcome.resolvedImagePath) {
+          setBgImage(outcome.resolvedImagePath);
+        }
+        bgUpload.clearSelection();
+        resetBgFileInput();
+        showAlert("success", outcome.data);
+        return;
+      default: {
+        const exhaustive: never = outcome;
+        return exhaustive;
       }
-
-      const uploadedPath: string = uploadData.data.publicPath;
-
-      // 2. Simpan jalur background ke database via Server Action
-      const actionRes = await updateHeroBackgroundAction({
-        backgroundImagePath: uploadedPath,
-      });
-
-      if (!actionRes.success) {
-        throw new Error(actionRes.error || "Gagal menyimpan pengaturan background.");
-      }
-
-      setBgImage(uploadedPath);
-      setSelectedBgFile(null);
-      if (previewBgUrl) {
-        URL.revokeObjectURL(previewBgUrl);
-        setPreviewBgUrl(null);
-      }
-      if (bgFileInputRef.current) {
-        bgFileInputRef.current.value = "";
-      }
-
-      showAlert("success", actionRes.message || "Background Hero berhasil diperbarui.");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Terjadi kesalahan saat menyimpan background.";
-      showAlert("error", msg);
-    } finally {
-      setIsUploadingBg(false);
     }
   };
 
   // Handler Pulihkan Background Bawaan
   const handleRestoreBackground = async () => {
+    if (isBgBusy) return;
     if (!confirm("Kembalikan background Hero ke tampilan bawaan (vektor blueprint)?")) {
       return;
     }
+    if (!bgUpload.acquireLock()) return;
 
     setIsRestoringBg(true);
     setAlert(null);
 
     try {
+      await abandonPendingBgUpload();
       const res = await restoreHeroBackgroundDefaultAction();
       if (!res.success) {
         throw new Error(res.error || "Gagal memulihkan background.");
       }
 
       setBgImage("");
-      setSelectedBgFile(null);
-      if (previewBgUrl) {
-        URL.revokeObjectURL(previewBgUrl);
-        setPreviewBgUrl(null);
-      }
-      if (bgFileInputRef.current) {
-        bgFileInputRef.current.value = "";
-      }
+      setPendingRetryBgPath(null);
+      bgUpload.clearSelection();
+      resetBgFileInput();
 
       showAlert("success", res.message || "Background bawaan berhasil dipulihkan.");
     } catch (err) {
@@ -186,6 +265,7 @@ export function HeroSettingsClient({
       showAlert("error", msg);
     } finally {
       setIsRestoringBg(false);
+      bgUpload.releaseLock();
     }
   };
 
@@ -303,7 +383,7 @@ export function HeroSettingsClient({
     }
   };
 
-  const activeDisplayBg = previewBgUrl || bgImage;
+  const activeDisplayBg = bgUpload.previewUrl || pendingRetryBgPath || bgImage;
 
   return (
     <AdminDashboardShell
@@ -426,7 +506,7 @@ export function HeroSettingsClient({
                 {/* Overlay Badge Status */}
                 <div className="absolute top-3 right-3 z-20">
                   <span className="px-2.5 py-1 text-[10px] font-mono font-semibold rounded bg-slate-950/80 border border-slate-700 text-slate-200 backdrop-blur-xs">
-                    {previewBgUrl
+                    {(bgUpload.previewUrl || pendingRetryBgPath)
                       ? "PRATINJAU FILE BARU"
                       : bgImage
                       ? "GAMBAR AKTIF"
@@ -455,6 +535,7 @@ export function HeroSettingsClient({
                   ref={bgFileInputRef}
                   type="file"
                   accept="image/jpeg,image/png,image/webp"
+                  disabled={isBgBusy}
                   onChange={handleBgFileSelect}
                   className="hidden"
                   id="hero-bg-file-input"
@@ -473,25 +554,31 @@ export function HeroSettingsClient({
                   </span>
                 </label>
 
-                {selectedBgFile && (
+                {bgUpload.selectedFile && (
                   <div className="p-3 rounded-lg bg-slate-900 border border-slate-700/80 flex items-center justify-between">
                     <div className="min-w-0 pr-2">
                       <p className="text-xs font-medium text-slate-200 truncate">
-                        {selectedBgFile.name}
+                        {bgUpload.selectedFile.name}
                       </p>
                       <p className="text-[10px] text-slate-400 font-mono">
-                        {(selectedBgFile.size / (1024 * 1024)).toFixed(2)} MB
+                        {(bgUpload.selectedFile.size / (1024 * 1024)).toFixed(2)} MB
                       </p>
                     </div>
                     <button
                       type="button"
-                      onClick={() => {
-                        setSelectedBgFile(null);
-                        if (previewBgUrl) URL.revokeObjectURL(previewBgUrl);
-                        setPreviewBgUrl(null);
-                        if (bgFileInputRef.current) bgFileInputRef.current.value = "";
+                      disabled={isBgBusy}
+                      onClick={async () => {
+                        if (isBgBusy || !bgUpload.acquireLock()) return;
+                        try {
+                          await abandonPendingBgUpload();
+                          setPendingRetryBgPath(null);
+                          bgUpload.clearSelection();
+                          resetBgFileInput();
+                        } finally {
+                          bgUpload.releaseLock();
+                        }
                       }}
-                      className="text-xs text-rose-400 hover:text-rose-300 underline shrink-0 cursor-pointer"
+                      className="text-xs text-rose-400 hover:text-rose-300 disabled:opacity-50 underline shrink-0 cursor-pointer"
                     >
                       Batal
                     </button>
@@ -503,10 +590,10 @@ export function HeroSettingsClient({
                 <button
                   type="button"
                   onClick={handleSaveBackground}
-                  disabled={!selectedBgFile || isUploadingBg}
+                  disabled={(!bgUpload.selectedFile && !pendingRetryBgPath) || isBgBusy}
                   className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 transition-all cursor-pointer shadow-sm"
                 >
-                  {isUploadingBg ? (
+                  {bgUpload.isBusy ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
                       <span>Mengunggah...</span>
@@ -522,7 +609,7 @@ export function HeroSettingsClient({
                 <button
                   type="button"
                   onClick={handleRestoreBackground}
-                  disabled={isRestoringBg || (!bgImage && !selectedBgFile)}
+                  disabled={isBgBusy || (!bgImage && !bgUpload.selectedFile && !pendingRetryBgPath)}
                   className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed border border-slate-700 transition-colors cursor-pointer"
                 >
                   {isRestoringBg ? (

@@ -14,9 +14,11 @@ import {
   ArrowRight,
   Bookmark,
   Newspaper,
+  AlertTriangle,
 } from "lucide-react";
 import { getPublicNewsBySlug, getRelatedNews } from "@/lib/public/news";
 import { getSiteSettings } from "@/lib/public/settings";
+import { parseArticleContent, sanitizeNewsHtml } from "@/lib/security";
 
 export const dynamic = "force-dynamic";
 
@@ -65,10 +67,20 @@ export default async function ArticleDetailPage({ params }: ArticleDetailPagePro
   const relatedArticles = await getRelatedNews(article.category, article.id, 3);
 
   const rawContent = article.content || article.excerpt;
-  const paragraphs = rawContent
-    .split(/\r?\n\r?\n/)
-    .map((p) => p.trim())
-    .filter(Boolean);
+  const parsedContent = parseArticleContent(rawContent);
+
+  const plainParagraphs =
+    parsedContent.isSupported && !parsedContent.isRichText
+      ? parsedContent.body
+          .split(/\r?\n\r?\n/)
+          .map((p) => p.trim())
+          .filter(Boolean)
+      : [];
+
+  const sanitizedRichHtml =
+    parsedContent.isSupported && parsedContent.isRichText
+      ? sanitizeNewsHtml(parsedContent.body)
+      : "";
 
   return (
     <div className="flex flex-col min-h-screen bg-white">
@@ -177,17 +189,34 @@ export default async function ArticleDetailPage({ params }: ArticleDetailPagePro
                 </p>
               </div>
 
-              {/* Badan Teks Artikel (XSS-Safe, Preserving Paragraphs) */}
-              <div className="prose prose-slate max-w-none text-[#1E293B] leading-relaxed pt-2">
-                {paragraphs.map((para, index) => (
-                  <p
-                    key={index}
-                    className="text-base sm:text-[17px] text-[#1E293B] leading-relaxed mb-6 whitespace-pre-line"
-                  >
-                    {para}
-                  </p>
-                ))}
-              </div>
+              {/* Badan Teks Artikel */}
+              {!parsedContent.isSupported ? (
+                <div className="p-5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-900 text-sm flex items-start gap-3 my-6">
+                  <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5 text-[#D97706]" aria-hidden="true" />
+                  <div className="space-y-1">
+                    <p className="font-bold text-[#0F172A]">Format Naskah Memerlukan Pembaruan</p>
+                    <p className="text-xs text-[#334155] leading-relaxed">
+                      Naskah artikel ini disimpan dalam format dokumen yang memerlukan pembaruan format oleh tim redaksi sebelum dapat ditampilkan seutuhnya. Silakan hubungi sekretariat untuk informasi lebih lanjut.
+                    </p>
+                  </div>
+                </div>
+              ) : parsedContent.isRichText ? (
+                <div
+                  className="article-rich-content pt-2"
+                  dangerouslySetInnerHTML={{ __html: sanitizedRichHtml }}
+                />
+              ) : (
+                <div className="article-plain-content text-[#1E293B] leading-relaxed pt-2">
+                  {plainParagraphs.map((para, index) => (
+                    <p
+                      key={index}
+                      className="text-base sm:text-[17px] text-[#1E293B] leading-relaxed mb-6 whitespace-pre-line"
+                    >
+                      {para}
+                    </p>
+                  ))}
+                </div>
+              )}
 
               {/* Bagian Bawah Artikel: Penulis & Tombol Navigasi */}
               <div className="pt-8 border-t border-[#E2E8F0] flex flex-col sm:flex-row sm:items-center justify-between gap-4">

@@ -4,12 +4,21 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { getCurrentAdmin, type AuthenticatedAdmin } from "@/lib/auth/server";
 import { deletePartnerLogoFile } from "@/lib/storage/partner";
+import {
+  isValidPartnerLogoPath as validatePartnerLogoPath,
+  isPartnerLogoReferenced,
+} from "@/lib/security";
+import {
+  runLockedUploadCommit,
+  safeDeleteUnreferencedImage,
+} from "./action-upload-guard";
 
 export interface ActionResult<T = unknown> {
   success: boolean;
   message?: string;
   error?: string;
   data?: T;
+  rollbackToken?: string;
 }
 
 export interface PartnerItem {
@@ -36,6 +45,7 @@ export interface CreatePartnerInput {
   shortName: string;
   category?: string | null;
   logoPath?: string | null;
+  uploadToken?: string;
   websiteUrl?: string | null;
   order?: number;
   isActive?: boolean;
@@ -47,6 +57,7 @@ export interface UpdatePartnerInput {
   shortName?: string;
   category?: string | null;
   logoPath?: string | null;
+  uploadToken?: string;
   websiteUrl?: string | null;
   order?: number;
   isActive?: boolean;
@@ -86,17 +97,7 @@ function isValidHttpUrl(val: string): boolean {
 function isValidPartnerLogoPath(val: unknown): boolean {
   if (val === null || val === undefined) return true;
   if (typeof val !== "string") return false;
-  const trimmed = val.trim();
-  if (trimmed === "") return true;
-
-  if (trimmed.includes("..") || trimmed.includes("\\")) return false;
-  if (!trimmed.startsWith("/uploads/partners/") && !trimmed.startsWith("uploads/partners/")) {
-    return false;
-  }
-
-  const allowedExts = [".jpg", ".jpeg", ".png", ".webp"];
-  const lower = trimmed.toLowerCase();
-  return allowedExts.some((ext) => lower.endsWith(ext));
+  return validatePartnerLogoPath(val, { optional: true });
 }
 
 function safeRevalidate(): void {
@@ -199,78 +200,96 @@ export async function createPartnerAction(
   input: CreatePartnerInput
 ): Promise<ActionResult<PartnerItem>> {
   try {
-    await verifyActiveAdmin();
+    const admin = await verifyActiveAdmin();
+    const candidateLogoPath =
+      typeof input.logoPath === "string" ? input.logoPath.trim() || null : null;
 
-    const name = sanitizeInput(input.name);
-    const shortName = sanitizeInput(input.shortName);
-    const category = sanitizeInput(input.category) || null;
-    const websiteUrl = sanitizeInput(input.websiteUrl) || null;
-    const logoPath = typeof input.logoPath === "string" ? input.logoPath.trim() || null : null;
+    const result = await runLockedUploadCommit<PartnerItem>({
+      adminId: admin.id,
+      module: "partners",
+      publicPath: candidateLogoPath,
+      uploadToken: input.uploadToken,
+      fallbackError: "Gagal menambahkan data mitra kerja.",
+      operation: async () => {
+        const name = sanitizeInput(input.name);
+        const shortName = sanitizeInput(input.shortName);
+        const category = sanitizeInput(input.category) || null;
+        const websiteUrl = sanitizeInput(input.websiteUrl) || null;
+        const logoPath = candidateLogoPath;
 
-    if (!name) {
-      return { success: false, error: "Nama lengkap mitra kerja wajib diisi." };
-    }
-    if (name.length > 150) {
-      return { success: false, error: "Nama mitra kerja maksimal 150 karakter." };
-    }
+        if (!name) {
+          return { success: false, definiteFailure: true, error: "Nama lengkap mitra kerja wajib diisi." };
+        }
+        if (name.length > 150) {
+          return { success: false, definiteFailure: true, error: "Nama mitra kerja maksimal 150 karakter." };
+        }
 
-    if (!shortName) {
-      return { success: false, error: "Singkatan/nama pendek mitra kerja wajib diisi." };
-    }
-    if (shortName.length > 50) {
-      return { success: false, error: "Singkatan nama mitra maksimal 50 karakter." };
-    }
+        if (!shortName) {
+          return { success: false, definiteFailure: true, error: "Singkatan/nama pendek mitra kerja wajib diisi." };
+        }
+        if (shortName.length > 50) {
+          return { success: false, definiteFailure: true, error: "Singkatan nama mitra maksimal 50 karakter." };
+        }
 
-    if (category && category.length > 50) {
-      return { success: false, error: "Kategori mitra maksimal 50 karakter." };
-    }
+        if (category && category.length > 50) {
+          return { success: false, definiteFailure: true, error: "Kategori mitra maksimal 50 karakter." };
+        }
 
-    if (websiteUrl) {
-      if (websiteUrl.length > 255) {
-        return { success: false, error: "URL website mitra maksimal 255 karakter." };
-      }
-      if (!isValidHttpUrl(websiteUrl)) {
-        return { success: false, error: "Format URL website tidak valid. Gunakan http:// atau https://." };
-      }
-    }
+        if (websiteUrl) {
+          if (websiteUrl.length > 255) {
+            return { success: false, definiteFailure: true, error: "URL website mitra maksimal 255 karakter." };
+          }
+          if (!isValidHttpUrl(websiteUrl)) {
+            return {
+              success: false,
+              definiteFailure: true,
+              error: "Format URL website tidak valid. Gunakan http:// atau https://.",
+            };
+          }
+        }
 
-    if (logoPath !== null && !isValidPartnerLogoPath(logoPath)) {
-      return {
-        success: false,
-        error: "Jalur berkas logo tidak valid. Gunakan gambar dari direktori /uploads/partners/.",
-      };
-    }
+        if (logoPath !== null && !isValidPartnerLogoPath(logoPath)) {
+          return {
+            success: false,
+            definiteFailure: true,
+            error: "Jalur berkas logo tidak valid. Gunakan gambar dari direktori /uploads/partners/.",
+          };
+        }
 
-    let order = input.order;
-    if (typeof order !== "number" || isNaN(order) || order < 0) {
-      const maxOrder = await prisma.partner.findFirst({
-        orderBy: { order: "desc" },
-        select: { order: true },
-      });
-      order = (maxOrder?.order ?? -1) + 1;
-    }
+        let order = input.order;
+        if (typeof order !== "number" || isNaN(order) || order < 0) {
+          const maxOrder = await prisma.partner.findFirst({
+            orderBy: { order: "desc" },
+            select: { order: true },
+          });
+          order = (maxOrder?.order ?? -1) + 1;
+        }
 
-    const isActive = input.isActive !== undefined ? Boolean(input.isActive) : true;
+        const isActive = input.isActive !== undefined ? Boolean(input.isActive) : true;
 
-    const created = await prisma.partner.create({
-      data: {
-        name,
-        shortName,
-        category,
-        logoPath,
-        websiteUrl,
-        order,
-        isActive,
+        const created = await prisma.partner.create({
+          data: {
+            name,
+            shortName,
+            category,
+            logoPath,
+            websiteUrl,
+            order,
+            isActive,
+          },
+        });
+
+        safeRevalidate();
+
+        return {
+          success: true,
+          message: "Data mitra kerja berhasil ditambahkan.",
+          data: mapPartnerToItem(created),
+        };
       },
     });
 
-    safeRevalidate();
-
-    return {
-      success: true,
-      message: "Data mitra kerja berhasil ditambahkan.",
-      data: mapPartnerToItem(created),
-    };
+    return result;
   } catch (err) {
     return {
       success: false,
@@ -283,127 +302,146 @@ export async function updatePartnerAction(
   input: UpdatePartnerInput
 ): Promise<ActionResult<PartnerItem>> {
   try {
-    await verifyActiveAdmin();
-
-    const id = sanitizeInput(input.id);
-    if (!id) {
-      return { success: false, error: "ID mitra kerja tidak valid." };
-    }
-
-    const existing = await prisma.partner.findUnique({
-      where: { id },
-    });
-
-    if (!existing) {
-      return { success: false, error: "Data mitra kerja tidak ditemukan." };
-    }
-
-    const updateData: {
-      name?: string;
-      shortName?: string;
-      category?: string | null;
-      websiteUrl?: string | null;
-      logoPath?: string | null;
-      order?: number;
-      isActive?: boolean;
-    } = {};
+    const admin = await verifyActiveAdmin();
+    const candidateLogoPath =
+      typeof input.logoPath === "string" ? input.logoPath.trim() || null : null;
 
     let oldLogoToDelete: string | null = null;
+    let updatedId = "";
 
-    if (input.name !== undefined) {
-      const name = sanitizeInput(input.name);
-      if (!name) {
-        return { success: false, error: "Nama lengkap mitra kerja tidak boleh kosong." };
-      }
-      if (name.length > 150) {
-        return { success: false, error: "Nama mitra kerja maksimal 150 karakter." };
-      }
-      updateData.name = name;
-    }
-
-    if (input.shortName !== undefined) {
-      const shortName = sanitizeInput(input.shortName);
-      if (!shortName) {
-        return { success: false, error: "Singkatan nama mitra kerja tidak boleh kosong." };
-      }
-      if (shortName.length > 50) {
-        return { success: false, error: "Singkatan nama mitra maksimal 50 karakter." };
-      }
-      updateData.shortName = shortName;
-    }
-
-    if (input.category !== undefined) {
-      const category = sanitizeInput(input.category) || null;
-      if (category && category.length > 50) {
-        return { success: false, error: "Kategori mitra maksimal 50 karakter." };
-      }
-      updateData.category = category;
-    }
-
-    if (input.websiteUrl !== undefined) {
-      const websiteUrl = sanitizeInput(input.websiteUrl) || null;
-      if (websiteUrl) {
-        if (websiteUrl.length > 255) {
-          return { success: false, error: "URL website mitra maksimal 255 karakter." };
+    const result = await runLockedUploadCommit<PartnerItem>({
+      adminId: admin.id,
+      module: "partners",
+      publicPath: candidateLogoPath,
+      uploadToken: input.uploadToken,
+      fallbackError: "Gagal memperbarui data mitra kerja.",
+      operation: async () => {
+        const id = sanitizeInput(input.id);
+        if (!id) {
+          return { success: false, definiteFailure: true, error: "ID mitra kerja tidak valid." };
         }
-        if (!isValidHttpUrl(websiteUrl)) {
-          return { success: false, error: "Format URL website tidak valid. Gunakan http:// atau https://." };
-        }
-      }
-      updateData.websiteUrl = websiteUrl;
-    }
 
-    if (input.logoPath !== undefined) {
-      const logoPath = typeof input.logoPath === "string" ? input.logoPath.trim() || null : null;
-      if (logoPath !== null && !isValidPartnerLogoPath(logoPath)) {
+        const existing = await prisma.partner.findUnique({
+          where: { id },
+        });
+
+        if (!existing) {
+          return { success: false, definiteFailure: true, error: "Data mitra kerja tidak ditemukan." };
+        }
+
+        const updateData: {
+          name?: string;
+          shortName?: string;
+          category?: string | null;
+          websiteUrl?: string | null;
+          logoPath?: string | null;
+          order?: number;
+          isActive?: boolean;
+        } = {};
+
+        if (input.name !== undefined) {
+          const name = sanitizeInput(input.name);
+          if (!name) {
+            return { success: false, definiteFailure: true, error: "Nama lengkap mitra kerja tidak boleh kosong." };
+          }
+          if (name.length > 150) {
+            return { success: false, definiteFailure: true, error: "Nama mitra kerja maksimal 150 karakter." };
+          }
+          updateData.name = name;
+        }
+
+        if (input.shortName !== undefined) {
+          const shortName = sanitizeInput(input.shortName);
+          if (!shortName) {
+            return { success: false, definiteFailure: true, error: "Singkatan nama mitra kerja tidak boleh kosong." };
+          }
+          if (shortName.length > 50) {
+            return { success: false, definiteFailure: true, error: "Singkatan nama mitra maksimal 50 karakter." };
+          }
+          updateData.shortName = shortName;
+        }
+
+        if (input.category !== undefined) {
+          const category = sanitizeInput(input.category) || null;
+          if (category && category.length > 50) {
+            return { success: false, definiteFailure: true, error: "Kategori mitra maksimal 50 karakter." };
+          }
+          updateData.category = category;
+        }
+
+        if (input.websiteUrl !== undefined) {
+          const websiteUrl = sanitizeInput(input.websiteUrl) || null;
+          if (websiteUrl) {
+            if (websiteUrl.length > 255) {
+              return { success: false, definiteFailure: true, error: "URL website mitra maksimal 255 karakter." };
+            }
+            if (!isValidHttpUrl(websiteUrl)) {
+              return {
+                success: false,
+                definiteFailure: true,
+                error: "Format URL website tidak valid. Gunakan http:// atau https://.",
+              };
+            }
+          }
+          updateData.websiteUrl = websiteUrl;
+        }
+
+        if (input.logoPath !== undefined) {
+          const logoPath = candidateLogoPath;
+          if (logoPath !== null && !isValidPartnerLogoPath(logoPath)) {
+            return {
+              success: false,
+              definiteFailure: true,
+              error: "Jalur berkas logo tidak valid. Gunakan gambar dari direktori /uploads/partners/.",
+            };
+          }
+          updateData.logoPath = logoPath;
+          if (existing.logoPath && existing.logoPath !== logoPath) {
+            oldLogoToDelete = existing.logoPath;
+          }
+        }
+
+        if (input.order !== undefined) {
+          if (typeof input.order !== "number" || isNaN(input.order) || input.order < 0) {
+            return { success: false, definiteFailure: true, error: "Urutan harus berupa angka positif." };
+          }
+          updateData.order = Math.floor(input.order);
+        }
+
+        if (input.isActive !== undefined) {
+          updateData.isActive = Boolean(input.isActive);
+        }
+
+        const updated = await prisma.partner.update({
+          where: { id },
+          data: updateData,
+        });
+
+        updatedId = id;
         return {
-          success: false,
-          error: "Jalur berkas logo tidak valid. Gunakan gambar dari direktori /uploads/partners/.",
+          success: true,
+          message: "Data mitra kerja berhasil diperbarui.",
+          data: mapPartnerToItem(updated),
         };
-      }
-      updateData.logoPath = logoPath;
-      if (existing.logoPath && existing.logoPath !== logoPath) {
-        oldLogoToDelete = existing.logoPath;
-      }
-    }
-
-    if (input.order !== undefined) {
-      if (typeof input.order !== "number" || isNaN(input.order) || input.order < 0) {
-        return { success: false, error: "Urutan harus berupa angka positif." };
-      }
-      updateData.order = Math.floor(input.order);
-    }
-
-    if (input.isActive !== undefined) {
-      updateData.isActive = Boolean(input.isActive);
-    }
-
-    const updated = await prisma.partner.update({
-      where: { id },
-      data: updateData,
+      },
     });
 
+    if (!result.success) {
+      return result;
+    }
+
     if (oldLogoToDelete) {
-      try {
-        const isShared = await prisma.partner.findFirst({
-          where: { logoPath: oldLogoToDelete, id: { not: id } },
-          select: { id: true },
-        });
-        if (!isShared) {
-          await deletePartnerLogoFile(oldLogoToDelete);
-        }
-      } catch (cleanupErr) {
-        console.error("Gagal membersihkan berkas logo lama:", cleanupErr);
-      }
+      await safeDeleteUnreferencedImage({
+        publicPath: oldLogoToDelete,
+        isReferenced: (p) =>
+          isPartnerLogoReferenced(p, { prisma, excludePartnerId: updatedId }),
+        deleteFile: deletePartnerLogoFile,
+        logLabel: "Gagal membersihkan berkas logo lama:",
+      });
     }
 
     safeRevalidate();
-
-    return {
-      success: true,
-      message: "Data mitra kerja berhasil diperbarui.",
-      data: mapPartnerToItem(updated),
-    };
+    return result;
   } catch (err) {
     return {
       success: false,
@@ -437,17 +475,12 @@ export async function deletePartnerAction(
     });
 
     if (existing.logoPath) {
-      try {
-        const isShared = await prisma.partner.findFirst({
-          where: { logoPath: existing.logoPath },
-          select: { id: true },
-        });
-        if (!isShared) {
-          await deletePartnerLogoFile(existing.logoPath);
-        }
-      } catch (cleanupErr) {
-        console.error("Gagal membersihkan berkas logo setelah penghapusan record:", cleanupErr);
-      }
+      await safeDeleteUnreferencedImage({
+        publicPath: existing.logoPath,
+        isReferenced: (p) => isPartnerLogoReferenced(p, { prisma }),
+        deleteFile: deletePartnerLogoFile,
+        logLabel: "Gagal membersihkan berkas logo setelah penghapusan record:",
+      });
     }
 
     safeRevalidate();

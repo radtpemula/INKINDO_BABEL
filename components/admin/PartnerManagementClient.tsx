@@ -6,6 +6,21 @@ import {
   AdminDashboardShell,
   type AdminProfile,
 } from "@/components/admin";
+import {
+  executeDeferredSubmit,
+  type ClientImageValidationMessages,
+  type UploadRequestConfig,
+} from "./deferred-image-upload";
+import {
+  cleanupAbandonedPendingUpload,
+  createPendingUploadRecord,
+  defaultClientOrphanReporter,
+  resetPendingUploadForRetry,
+  transitionPendingUploadOutcome,
+  type PendingUploadRecord,
+} from "./pending-upload-cleanup";
+import { useDeferredImageUpload } from "./use-deferred-image-upload";
+import { rollbackPendingUploadAction } from "@/lib/admin/upload-rollback-action";
 import { logoutAdminAction } from "@/lib/auth/actions";
 import {
   type PartnerItem,
@@ -71,6 +86,18 @@ const INITIAL_FORM_STATE: FormState = {
   isActive: true,
 };
 
+const PARTNER_IMAGE_MESSAGES: ClientImageValidationMessages = {
+  emptyFile: "Ukuran berkas logo tidak boleh kosong.",
+  oversizeFile: "Ukuran logo melebihi batas maksimum 5 MiB.",
+  invalidType: "Format berkas harus JPEG, PNG, atau WebP.",
+};
+
+const PARTNER_UPLOAD_CONFIG: UploadRequestConfig = {
+  endpoint: "/api/admin/partner-upload",
+  defaultError: "Gagal mengunggah berkas logo.",
+  networkError: "Terjadi kesalahan jaringan saat mengunggah logo.",
+};
+
 export function PartnerManagementClient({
   profile,
   initialPartners,
@@ -95,9 +122,23 @@ export function PartnerManagementClient({
   const [initialSnapshot, setInitialSnapshot] = useState<string>("");
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
-  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
-  const [isSubmittingForm, setIsSubmittingForm] = useState(false);
+  const {
+    selectedFile: selectedLogoFile,
+    previewUrl: previewLogoUrl,
+    selection: logoSelection,
+    isUploading: isUploadingLogo,
+    isBusy: isModalBusy,
+    setIsUploading: setIsUploadingLogo,
+    setIsSubmitting: setIsSubmittingForm,
+    submitLockRef,
+    selectFile: selectLogoFile,
+    clearSelection: clearLogoSelection,
+  } = useDeferredImageUpload();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingUploadRef = useRef<PendingUploadRecord | null>(null);
+  const [isCleaningUpUpload, setIsCleaningUpUpload] = useState(false);
+  const isInteractionLocked = isModalBusy || isCleaningUpUpload;
+  const activeLogoPreview = previewLogoUrl ?? formState.logoPath;
 
   const [deleteTarget, setDeleteTarget] = useState<PartnerItem | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -169,7 +210,19 @@ export function PartnerManagementClient({
     }
   };
 
+  const abandonPendingUpload = async (pending: PendingUploadRecord | null): Promise<void> => {
+    if (!pending) return;
+    setIsCleaningUpUpload(true);
+    try {
+      await cleanupAbandonedPendingUpload(pending, rollbackPendingUploadAction);
+    } finally {
+      setIsCleaningUpUpload(false);
+    }
+  };
+
   const handleOpenCreateModal = () => {
+    pendingUploadRef.current = null;
+    clearLogoSelection();
     setModalMode("create");
     setEditingPartner(null);
     const freshState: FormState = {
@@ -186,6 +239,8 @@ export function PartnerManagementClient({
   };
 
   const handleOpenEditModal = (partner: PartnerItem) => {
+    pendingUploadRef.current = null;
+    clearLogoSelection();
     setModalMode("edit");
     setEditingPartner(partner);
 
@@ -216,72 +271,69 @@ export function PartnerManagementClient({
     }
   };
 
-  const handleCloseModal = () => {
-    const isDirty = JSON.stringify(formState) !== initialSnapshot;
+  const handleCloseModal = async () => {
+    if (isInteractionLocked || submitLockRef.current) {
+      return;
+    }
+    const isDirty = selectedLogoFile !== null || JSON.stringify(formState) !== initialSnapshot;
     if (isDirty) {
       if (!window.confirm("Perubahan formulir belum disimpan. Tutup jendela?")) {
         return;
       }
     }
-    setIsModalOpen(false);
-    setEditingPartner(null);
-    setFormErrors({});
+    const pendingToCleanup = pendingUploadRef.current;
+    pendingUploadRef.current = null;
+    submitLockRef.current = true;
+    try {
+      await abandonPendingUpload(pendingToCleanup);
+    } finally {
+      submitLockRef.current = false;
+      clearLogoSelection();
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+      setIsModalOpen(false);
+      setEditingPartner(null);
+      setFormErrors({});
+    }
   };
 
-  const handleLogoFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleLogoFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (isInteractionLocked || submitLockRef.current) {
+      return;
+    }
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 5 * 1024 * 1024) {
-      showNotification("error", "Ukuran logo melebihi batas maksimum 5 MiB.");
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      return;
+    const validationError = selectLogoFile(file, PARTNER_IMAGE_MESSAGES);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
     }
-
-    const validMimes = ["image/jpeg", "image/png", "image/webp"];
-    if (!validMimes.includes(file.type)) {
-      showNotification("error", "Format berkas harus JPEG, PNG, atau WebP.");
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      return;
-    }
-
-    setIsUploadingLogo(true);
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-
-      const res = await fetch("/api/admin/partner-upload", {
-        method: "POST",
-        body: formData,
-      });
-
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        showNotification("error", json.error || "Gagal mengunggah berkas logo.");
-        if (fileInputRef.current) fileInputRef.current.value = "";
-        return;
-      }
-
-      const uploadedPath = json.path || json.data?.publicPath;
-      setFormState((prev) => ({
-        ...prev,
-        logoPath: uploadedPath,
-      }));
-      showNotification("success", "Logo berhasil diunggah.");
-    } catch {
-      showNotification("error", "Terjadi kesalahan jaringan saat mengunggah logo.");
-    } finally {
-      setIsUploadingLogo(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+    if (validationError) {
+      showNotification("error", validationError);
     }
   };
 
-  const handleRemoveLogo = () => {
+  const handleRemoveLogo = async () => {
+    if (isInteractionLocked || submitLockRef.current) {
+      return;
+    }
+    const pendingToCleanup = pendingUploadRef.current;
+    pendingUploadRef.current = null;
+    clearLogoSelection();
     setFormState((prev) => ({
       ...prev,
       logoPath: null,
     }));
     if (fileInputRef.current) fileInputRef.current.value = "";
+    if (pendingToCleanup) {
+      submitLockRef.current = true;
+      try {
+        await abandonPendingUpload(pendingToCleanup);
+      } finally {
+        submitLockRef.current = false;
+      }
+    }
   };
 
   const validateForm = (): boolean => {
@@ -323,62 +375,129 @@ export function PartnerManagementClient({
 
   const handleSubmitForm = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (!validateForm()) {
-      showNotification("error", "Periksa kembali isian formulir yang ditandai merah.");
+    if (isCleaningUpUpload) {
       return;
     }
-
-    setIsSubmittingForm(true);
 
     const finalCategory =
       formState.category === "__custom__"
         ? formState.customCategory.trim()
         : formState.category.trim();
 
-    try {
-      if (modalMode === "create") {
-        const res = await createPartnerAction({
-          name: formState.name.trim(),
-          shortName: formState.shortName.trim(),
-          category: finalCategory || null,
-          websiteUrl: formState.websiteUrl.trim() || null,
-          logoPath: formState.logoPath,
-          isActive: formState.isActive,
-        });
-
-        if (res.success && res.data) {
-          setPartners((prev) => [...prev, res.data!].sort((a, b) => a.order - b.order));
-          setIsModalOpen(false);
-          showNotification("success", `Mitra "${res.data.shortName}" berhasil ditambahkan.`);
-        } else {
-          showNotification("error", res.error || "Gagal menambahkan mitra kerja.");
+    const outcome = await executeDeferredSubmit({
+      lockRef: submitLockRef,
+      selection: logoSelection,
+      persistedImagePath: formState.logoPath,
+      pendingUploadToken: pendingUploadRef.current?.uploadToken,
+      validateForm: () => {
+        const valid = validateForm();
+        if (!valid) {
+          showNotification("error", "Periksa kembali isian formulir yang ditandai merah.");
         }
-      } else if (modalMode === "edit" && editingPartner) {
-        const res = await updatePartnerAction({
-          id: editingPartner.id,
-          name: formState.name.trim(),
-          shortName: formState.shortName.trim(),
-          category: finalCategory || null,
-          websiteUrl: formState.websiteUrl.trim() || null,
-          logoPath: formState.logoPath,
-          isActive: formState.isActive,
-        });
+        return valid;
+      },
+      uploadConfig: PARTNER_UPLOAD_CONFIG,
+      onUploadPhaseChange: setIsUploadingLogo,
+      onSubmitPhaseChange: setIsSubmittingForm,
+      onImageUploaded: (publicPath, uploadToken) => {
+        const previousPending = pendingUploadRef.current;
+        pendingUploadRef.current = createPendingUploadRecord("partners", publicPath, uploadToken);
+        if (previousPending && previousPending.publicPath !== publicPath) {
+          void cleanupAbandonedPendingUpload(previousPending, rollbackPendingUploadAction);
+        }
+        clearLogoSelection();
+        setFormState((prev) => ({
+          ...prev,
+          logoPath: publicPath,
+        }));
+      },
+      onSaveAttemptStart: () => {
+        pendingUploadRef.current = resetPendingUploadForRetry(pendingUploadRef.current);
+      },
+      saveRecord: async (resolvedLogoPath, uploadToken) => {
+        if (modalMode === "create") {
+          return createPartnerAction({
+            name: formState.name.trim(),
+            shortName: formState.shortName.trim(),
+            category: finalCategory || null,
+            websiteUrl: formState.websiteUrl.trim() || null,
+            logoPath: resolvedLogoPath,
+            uploadToken,
+            isActive: formState.isActive,
+          });
+        }
+        if (modalMode === "edit" && editingPartner) {
+          return updatePartnerAction({
+            id: editingPartner.id,
+            name: formState.name.trim(),
+            shortName: formState.shortName.trim(),
+            category: finalCategory || null,
+            websiteUrl: formState.websiteUrl.trim() || null,
+            logoPath: resolvedLogoPath,
+            uploadToken,
+            isActive: formState.isActive,
+          });
+        }
+        return { success: false, error: "Mode formulir tidak valid." };
+      },
+    });
 
-        if (res.success && res.data) {
+    switch (outcome.status) {
+      case "locked":
+      case "validation_failed":
+        return;
+      case "upload_failed":
+        showNotification("error", outcome.error);
+        return;
+      case "save_failed":
+        pendingUploadRef.current = transitionPendingUploadOutcome(
+          pendingUploadRef.current,
+          "definite_failure",
+          outcome.rollbackToken
+        );
+        showNotification(
+          "error",
+          outcome.error ||
+            (modalMode === "create"
+              ? "Gagal menambahkan mitra kerja."
+              : "Gagal memperbarui mitra kerja.")
+        );
+        return;
+      case "unexpected_error":
+        pendingUploadRef.current = transitionPendingUploadOutcome(
+          pendingUploadRef.current,
+          "unknown"
+        );
+        if (outcome.saveAttempted && outcome.resolvedImagePath) {
+          defaultClientOrphanReporter({
+            module: "partners",
+            publicPath: outcome.resolvedImagePath,
+            reason: "unknown_save_outcome",
+            timestamp: new Date().toISOString(),
+          });
+        }
+        showNotification(
+          "error",
+          "Koneksi terputus atau status penyimpanan tidak diketahui. Berkas gambar tetap dipertahankan agar data aman."
+        );
+        return;
+      case "succeeded":
+        pendingUploadRef.current = null;
+        if (modalMode === "create") {
+          setPartners((prev) => [...prev, outcome.data].sort((a, b) => a.order - b.order));
+          showNotification("success", `Mitra "${outcome.data.shortName}" berhasil ditambahkan.`);
+        } else if (editingPartner) {
           setPartners((prev) =>
-            prev.map((p) => (p.id === editingPartner.id ? res.data! : p)).sort((a, b) => a.order - b.order)
+            prev
+              .map((p) => (p.id === editingPartner.id ? outcome.data : p))
+              .sort((a, b) => a.order - b.order)
           );
-          setIsModalOpen(false);
-          showNotification("success", `Mitra "${res.data.shortName}" berhasil diperbarui.`);
-        } else {
-          showNotification("error", res.error || "Gagal memperbarui mitra kerja.");
+          showNotification("success", `Mitra "${outcome.data.shortName}" berhasil diperbarui.`);
         }
-      }
-    } catch {
-      showNotification("error", "Terjadi kesalahan tidak terduga saat menyimpan data.");
-    } finally {
-      setIsSubmittingForm(false);
+        clearLogoSelection();
+        setIsModalOpen(false);
+        setEditingPartner(null);
+        return;
     }
   };
 
@@ -832,7 +951,8 @@ export function PartnerManagementClient({
               <button
                 type="button"
                 onClick={handleCloseModal}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors"
+                disabled={isInteractionLocked}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors disabled:opacity-50"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -936,11 +1056,11 @@ export function PartnerManagementClient({
                   Logo Mitra (Opsional)
                 </label>
                 <div className="border border-slate-700/80 rounded-xl p-4 bg-[#0F172A] space-y-3">
-                  {formState.logoPath ? (
+                  {activeLogoPreview ? (
                     <div className="flex items-center gap-4">
                       <div className="w-20 h-16 rounded-lg bg-[#1E293B] border border-slate-700 flex items-center justify-center p-2 overflow-hidden shrink-0">
                         <Image
-                          src={formState.logoPath}
+                          src={activeLogoPreview}
                           alt="Preview logo"
                           width={80}
                           height={64}
@@ -949,14 +1069,18 @@ export function PartnerManagementClient({
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-xs font-medium text-slate-300 truncate">
-                          {formState.logoPath}
+                          {selectedLogoFile ? selectedLogoFile.name : formState.logoPath}
                         </p>
-                        <p className="text-[11px] text-emerald-400 mt-0.5">Logo siap disimpan</p>
+                        <p className="text-[11px] text-emerald-400 mt-0.5">
+                          {selectedLogoFile
+                            ? "Logo dipilih (akan diunggah saat disimpan)"
+                            : "Logo siap disimpan"}
+                        </p>
                         <div className="flex gap-2 mt-2">
                           <button
                             type="button"
                             onClick={() => fileInputRef.current?.click()}
-                            disabled={isUploadingLogo}
+                            disabled={isInteractionLocked}
                             className="text-xs text-[#D97706] hover:underline disabled:opacity-50"
                           >
                             Ganti Logo
@@ -965,7 +1089,7 @@ export function PartnerManagementClient({
                           <button
                             type="button"
                             onClick={handleRemoveLogo}
-                            disabled={isUploadingLogo}
+                            disabled={isInteractionLocked}
                             className="text-xs text-rose-400 hover:underline disabled:opacity-50"
                           >
                             Hapus Logo
@@ -981,7 +1105,7 @@ export function PartnerManagementClient({
                       <button
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
-                        disabled={isUploadingLogo}
+                        disabled={isInteractionLocked}
                         className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-lg text-xs font-semibold text-slate-200 transition-colors disabled:opacity-50"
                       >
                         {isUploadingLogo ? (
@@ -1003,6 +1127,7 @@ export function PartnerManagementClient({
                     ref={fileInputRef}
                     type="file"
                     accept="image/jpeg,image/png,image/webp"
+                    disabled={isInteractionLocked}
                     onChange={handleLogoFileSelect}
                     className="hidden"
                   />
@@ -1030,20 +1155,20 @@ export function PartnerManagementClient({
                 <button
                   type="button"
                   onClick={handleCloseModal}
-                  disabled={isSubmittingForm || isUploadingLogo}
+                  disabled={isInteractionLocked}
                   className="px-4 py-2 rounded-lg text-sm font-semibold text-slate-300 hover:bg-slate-800 transition-colors disabled:opacity-50"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmittingForm || isUploadingLogo}
+                  disabled={isInteractionLocked}
                   className="inline-flex items-center gap-2 bg-[#D97706] hover:bg-[#B45309] text-white px-5 py-2 rounded-lg text-sm font-semibold transition-colors disabled:opacity-50 shadow-sm"
                 >
-                  {isSubmittingForm ? (
+                  {isModalBusy ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Menyimpan...</span>
+                      <span>{isUploadingLogo ? "Mengunggah Logo..." : "Menyimpan..."}</span>
                     </>
                   ) : (
                     <span>{modalMode === "create" ? "Simpan Mitra" : "Simpan Perubahan"}</span>

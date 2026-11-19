@@ -3,21 +3,29 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { getCurrentAdmin, type AuthenticatedAdmin } from "@/lib/auth/server";
+import { isValidHeroImagePath, isHeroImageReferenced } from "@/lib/security";
+import { deleteHeroImageFile } from "@/lib/storage/hero";
 import {
   DEFAULT_HERO_SETTINGS,
   type PublicHeroSettings,
   type HeroCardSettings,
 } from "@/lib/public/hero";
+import {
+  runLockedUploadCommit,
+  safeDeleteUnreferencedImage,
+} from "./action-upload-guard";
 
 export interface ActionResult<T = unknown> {
   success: boolean;
   message?: string;
   error?: string;
   data?: T;
+  rollbackToken?: string;
 }
 
 export interface UpdateHeroBackgroundInput {
   backgroundImagePath: string;
+  uploadToken?: string;
 }
 
 export interface UpdateHeroContentInput {
@@ -141,50 +149,90 @@ export async function updateHeroBackgroundAction(
   input: UpdateHeroBackgroundInput
 ): Promise<ActionResult<{ backgroundImagePath: string }>> {
   try {
-    await verifyActiveAdmin();
-
+    const admin = await verifyActiveAdmin();
     const rawPath = sanitizeInput(input.backgroundImagePath);
-    if (!rawPath) {
-      return {
-        success: false,
-        error: "Jalur gambar background tidak boleh kosong. Gunakan 'Pulihkan Bawaan' untuk menghapus background.",
-      };
-    }
+    let previousPathToDelete: string | null = null;
 
-    // Validasi jalur gambar (harus relatif aman atau URL valid)
-    if (!rawPath.startsWith("/uploads/hero/") && !rawPath.startsWith("/images/")) {
-      return {
-        success: false,
-        error: "Jalur gambar tidak valid. Gunakan gambar hasil unggahan sistem.",
-      };
-    }
+    const result = await runLockedUploadCommit<{ backgroundImagePath: string }>({
+      adminId: admin.id,
+      module: "hero",
+      publicPath: rawPath || null,
+      uploadToken: input.uploadToken,
+      fallbackError: "Gagal memperbarui background Hero.",
+      operation: async () => {
+        if (!rawPath) {
+          return {
+            success: false,
+            definiteFailure: true,
+            error:
+              "Jalur gambar background tidak boleh kosong. Gunakan 'Pulihkan Bawaan' untuk menghapus background.",
+          };
+        }
 
-    await prisma.siteSetting.upsert({
-      where: { key: "hero_bg_image" },
-      update: {
-        value: rawPath,
-        updatedAt: new Date(),
-      },
-      create: {
-        group: "hero",
-        key: "hero_bg_image",
-        value: rawPath,
-        label: "Gambar Background Hero",
-        type: "image_url",
+        if (!isValidHeroImagePath(rawPath, { allowDefaultImages: true })) {
+          return {
+            success: false,
+            definiteFailure: true,
+            error: "Jalur gambar tidak valid. Gunakan gambar hasil unggahan sistem.",
+          };
+        }
+
+        const existing = await prisma.siteSetting.findUnique({
+          where: { key: "hero_bg_image" },
+        });
+
+        await prisma.siteSetting.upsert({
+          where: { key: "hero_bg_image" },
+          update: {
+            value: rawPath,
+            updatedAt: new Date(),
+          },
+          create: {
+            group: "hero",
+            key: "hero_bg_image",
+            value: rawPath,
+            label: "Gambar Background Hero",
+            type: "image_url",
+          },
+        });
+
+        if (
+          existing &&
+          existing.value &&
+          existing.value !== rawPath &&
+          isValidHeroImagePath(existing.value, { allowDefaultImages: false })
+        ) {
+          previousPathToDelete = existing.value;
+        }
+
+        return {
+          success: true,
+          message: "Gambar background Hero berhasil diperbarui.",
+          data: {
+            backgroundImagePath: rawPath,
+          },
+        };
       },
     });
 
-    safeRevalidate();
+    if (!result.success) {
+      return result;
+    }
 
-    return {
-      success: true,
-      message: "Gambar background Hero berhasil diperbarui.",
-      data: {
-        backgroundImagePath: rawPath,
-      },
-    };
+    if (previousPathToDelete) {
+      await safeDeleteUnreferencedImage({
+        publicPath: previousPathToDelete,
+        isReferenced: (p) => isHeroImageReferenced(p, { prisma }),
+        deleteFile: deleteHeroImageFile,
+        logLabel: "Gagal membersihkan berkas background Hero lama:",
+      });
+    }
+
+    safeRevalidate();
+    return result;
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : "Gagal memperbarui background Hero.";
+    const errorMsg =
+      err instanceof Error ? err.message : "Gagal memperbarui background Hero.";
     return {
       success: false,
       error: errorMsg,
@@ -199,12 +247,29 @@ export async function restoreHeroBackgroundDefaultAction(): Promise<ActionResult
   try {
     await verifyActiveAdmin();
 
+    const existing = await prisma.siteSetting.findUnique({
+      where: { key: "hero_bg_image" },
+    });
+
     await prisma.siteSetting.deleteMany({
       where: {
         group: "hero",
         key: "hero_bg_image",
       },
     });
+
+    if (
+      existing &&
+      existing.value &&
+      isValidHeroImagePath(existing.value, { allowDefaultImages: false })
+    ) {
+      await safeDeleteUnreferencedImage({
+        publicPath: existing.value,
+        isReferenced: (p) => isHeroImageReferenced(p, { prisma }),
+        deleteFile: deleteHeroImageFile,
+        logLabel: "Gagal membersihkan berkas background Hero saat reset:",
+      });
+    }
 
     safeRevalidate();
 
@@ -213,7 +278,8 @@ export async function restoreHeroBackgroundDefaultAction(): Promise<ActionResult
       message: "Background Hero berhasil dikembalikan ke tampilan bawaan.",
     };
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : "Gagal memulihkan background Hero.";
+    const errorMsg =
+      err instanceof Error ? err.message : "Gagal memulihkan background Hero.";
     return {
       success: false,
       error: errorMsg,
@@ -464,67 +530,91 @@ export async function updateHeroCardsAction(
 }
 
 export async function updateHeroCardImageAction(
-  input: { cardImagePath: string }
+  input: { cardImagePath: string; uploadToken?: string }
 ): Promise<ActionResult<{ cardImagePath: string }>> {
   try {
-    await verifyActiveAdmin();
-
+    const admin = await verifyActiveAdmin();
     const rawPath = sanitizeInput(input.cardImagePath);
-    if (!rawPath) {
-      return {
-        success: false,
-        error: "Jalur gambar kartu tidak boleh kosong. Gunakan 'Pulihkan Ilustrasi Bawaan' untuk menghapus.",
-      };
-    }
+    let previousPathToDelete: string | null = null;
 
-    if (!rawPath.startsWith("/uploads/hero/") && !rawPath.startsWith("/images/")) {
-      return {
-        success: false,
-        error: "Jalur gambar tidak valid. Gunakan gambar hasil unggahan sistem.",
-      };
-    }
+    const result = await runLockedUploadCommit<{ cardImagePath: string }>({
+      adminId: admin.id,
+      module: "hero",
+      publicPath: rawPath || null,
+      uploadToken: input.uploadToken,
+      fallbackError: "Gagal memperbarui gambar kartu Hero.",
+      operation: async () => {
+        if (!rawPath) {
+          return {
+            success: false,
+            definiteFailure: true,
+            error:
+              "Jalur gambar kartu tidak boleh kosong. Gunakan 'Pulihkan Ilustrasi Bawaan' untuk menghapus.",
+          };
+        }
 
-    const existing = await prisma.siteSetting.findUnique({
-      where: { key: "hero_card_image" },
+        if (!isValidHeroImagePath(rawPath, { allowDefaultImages: true })) {
+          return {
+            success: false,
+            definiteFailure: true,
+            error: "Jalur gambar tidak valid. Gunakan gambar hasil unggahan sistem.",
+          };
+        }
+
+        const existing = await prisma.siteSetting.findUnique({
+          where: { key: "hero_card_image" },
+        });
+
+        await prisma.siteSetting.upsert({
+          where: { key: "hero_card_image" },
+          update: {
+            value: rawPath,
+            updatedAt: new Date(),
+          },
+          create: {
+            group: "hero",
+            key: "hero_card_image",
+            value: rawPath,
+            label: "Gambar Kartu Visual Hero",
+            type: "image_url",
+          },
+        });
+
+        if (
+          existing &&
+          existing.value &&
+          existing.value !== rawPath &&
+          isValidHeroImagePath(existing.value, { allowDefaultImages: false })
+        ) {
+          previousPathToDelete = existing.value;
+        }
+
+        return {
+          success: true,
+          message: "Gambar kartu Hero berhasil diperbarui.",
+          data: { cardImagePath: rawPath },
+        };
+      },
     });
 
-    await prisma.siteSetting.upsert({
-      where: { key: "hero_card_image" },
-      update: {
-        value: rawPath,
-        updatedAt: new Date(),
-      },
-      create: {
-        group: "hero",
-        key: "hero_card_image",
-        value: rawPath,
-        label: "Gambar Kartu Visual Hero",
-        type: "image_url",
-      },
-    });
+    if (!result.success) {
+      return result;
+    }
 
-    if (existing && existing.value && existing.value !== rawPath) {
-      const { deleteHeroImageFile } = await import("@/lib/storage/hero");
-      const isUsedBySlide = await prisma.heroSlide.findFirst({
-        where: { imagePath: existing.value },
+    if (previousPathToDelete) {
+      await safeDeleteUnreferencedImage({
+        publicPath: previousPathToDelete,
+        isReferenced: (p) => isHeroImageReferenced(p, { prisma }),
+        deleteFile: deleteHeroImageFile,
+        logLabel: "Gagal membersihkan berkas kartu Hero lama:",
       });
-      const isUsedAsBg = await prisma.siteSetting.findFirst({
-        where: { key: "hero_bg_image", value: existing.value },
-      });
-      if (!isUsedBySlide && !isUsedAsBg) {
-        await deleteHeroImageFile(existing.value);
-      }
     }
 
     safeRevalidate();
-
-    return {
-      success: true,
-      message: "Gambar kartu Hero berhasil diperbarui.",
-      data: { cardImagePath: rawPath },
-    };
+    return result;
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : "Gagal memperbarui gambar kartu Hero.";
+    const errorMsg =
+      err instanceof Error ? err.message : "Gagal memperbarui gambar kartu Hero.";
     return { success: false, error: errorMsg };
   }
 }
@@ -541,17 +631,17 @@ export async function restoreHeroCardImageDefaultAction(): Promise<ActionResult>
       where: { group: "hero", key: "hero_card_image" },
     });
 
-    if (existing && existing.value) {
-      const { deleteHeroImageFile } = await import("@/lib/storage/hero");
-      const isUsedBySlide = await prisma.heroSlide.findFirst({
-        where: { imagePath: existing.value },
+    if (
+      existing &&
+      existing.value &&
+      isValidHeroImagePath(existing.value, { allowDefaultImages: false })
+    ) {
+      await safeDeleteUnreferencedImage({
+        publicPath: existing.value,
+        isReferenced: (p) => isHeroImageReferenced(p, { prisma }),
+        deleteFile: deleteHeroImageFile,
+        logLabel: "Gagal membersihkan berkas kartu Hero saat reset:",
       });
-      const isUsedAsBg = await prisma.siteSetting.findFirst({
-        where: { key: "hero_bg_image", value: existing.value },
-      });
-      if (!isUsedBySlide && !isUsedAsBg) {
-        await deleteHeroImageFile(existing.value);
-      }
     }
 
     safeRevalidate();
@@ -561,7 +651,8 @@ export async function restoreHeroCardImageDefaultAction(): Promise<ActionResult>
       message: "Gambar kartu Hero berhasil dikembalikan ke ilustrasi bawaan.",
     };
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : "Gagal memulihkan gambar kartu Hero.";
+    const errorMsg =
+      err instanceof Error ? err.message : "Gagal memulihkan gambar kartu Hero.";
     return { success: false, error: errorMsg };
   }
 }

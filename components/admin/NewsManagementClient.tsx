@@ -4,8 +4,16 @@ import React, { useState, useTransition, useRef, useMemo } from "react";
 import Image from "next/image";
 import {
   AdminDashboardShell,
+  RichTextEditor,
   type AdminProfile,
 } from "@/components/admin";
+import {
+  CONTENT_MARKER_V1_HTML,
+  parseArticleContent,
+  convertPlainTextToEditorHtml,
+  encodeArticleContent,
+  extractPlainText,
+} from "@/lib/security";
 import { logoutAdminAction } from "@/lib/auth/actions";
 import {
   type NewsArticleItem,
@@ -16,6 +24,26 @@ import {
   deleteNewsArticleAction,
   toggleNewsPublishAction,
 } from "@/lib/admin/news-actions";
+import {
+  executeDeferredSubmit,
+  type ClientImageValidationMessages,
+} from "./deferred-image-upload";
+import { useDeferredImageUpload } from "./use-deferred-image-upload";
+import {
+  cleanupAbandonedPendingUpload,
+  createPendingUploadRecord,
+  resetPendingUploadForRetry,
+  transitionPendingUploadOutcome,
+  type PendingUploadRecord,
+} from "./pending-upload-cleanup";
+import { rollbackPendingUploadAction } from "@/lib/admin/upload-rollback-action";
+import { rollbackDraftInlineUploadsAction } from "@/lib/admin/news-inline-action";
+
+const NEWS_COVER_VALIDATION_MESSAGES: ClientImageValidationMessages = {
+  emptyFile: "Ukuran berkas gambar kosong.",
+  oversizeFile: "Ukuran gambar melebihi batas maksimum 5 MB.",
+  invalidType: "Format berkas harus JPEG, PNG, atau WebP.",
+};
 import {
   Newspaper,
   Plus,
@@ -108,12 +136,65 @@ export function NewsManagementClient({
   const [formState, setFormState] = useState<FormState>(INITIAL_FORM_STATE);
   const [initialSnapshot, setInitialSnapshot] = useState<string>("");
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [isContentUnsupported, setIsContentUnsupported] = useState(false);
+  const [unsupportedErrorMessage, setUnsupportedErrorMessage] = useState("");
 
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [isUploadingImage, setIsUploadingImage] = useState(false);
-  const [isSubmittingForm, setIsSubmittingForm] = useState(false);
+  const coverUpload = useDeferredImageUpload();
+  const pendingCoverUploadRef = useRef<PendingUploadRecord | null>(null);
+  const [isCleaningUpCover, setIsCleaningUpCover] = useState(false);
+  const sessionInlineUploadsRef = useRef<Map<string, string>>(new Map());
+  const [hasSessionInlineUploads, setHasSessionInlineUploads] = useState(false);
+  const hasUnknownSaveOutcomeRef = useRef(false);
+  const [isCleaningUpInline, setIsCleaningUpInline] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const isModalBusy = coverUpload.isBusy || isCleaningUpCover || isCleaningUpInline;
+
+  const resetFileInput = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
+  const handleInlineImageUploaded = (info: { publicPath: string; uploadToken: string }) => {
+    sessionInlineUploadsRef.current.set(info.publicPath, info.uploadToken);
+    setHasSessionInlineUploads(true);
+  };
+
+  const abandonPendingCoverUpload = async () => {
+    const pending = pendingCoverUploadRef.current;
+    if (!pending) return;
+    pendingCoverUploadRef.current = null;
+    setIsCleaningUpCover(true);
+    try {
+      await cleanupAbandonedPendingUpload(pending, rollbackPendingUploadAction);
+    } finally {
+      setIsCleaningUpCover(false);
+    }
+  };
+
+  const abandonDraftInlineUploads = async () => {
+    if (sessionInlineUploadsRef.current.size === 0) return;
+    setHasSessionInlineUploads(false);
+    if (hasUnknownSaveOutcomeRef.current) {
+      console.warn(
+        "[orphan-candidate] Draft inline uploads dipertahankan karena status simpan terakhir tidak diketahui (unknown/timeout)."
+      );
+      sessionInlineUploadsRef.current.clear();
+      return;
+    }
+    const uploads = Array.from(sessionInlineUploadsRef.current.entries()).map(
+      ([publicPath, uploadToken]) => ({ publicPath, uploadToken })
+    );
+    sessionInlineUploadsRef.current.clear();
+    setIsCleaningUpInline(true);
+    try {
+      await rollbackDraftInlineUploadsAction({ uploads });
+    } catch (err) {
+      console.error("Gagal melakukan rollback draft inline uploads:", err);
+    } finally {
+      setIsCleaningUpInline(false);
+    }
+  };
 
   const [deleteTarget, setDeleteTarget] = useState<NewsArticleItem | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -197,21 +278,45 @@ export function NewsManagementClient({
   const handleOpenCreateModal = () => {
     setModalMode("create");
     setEditingArticle(null);
+    setIsContentUnsupported(false);
+    setUnsupportedErrorMessage("");
     const newForm: FormState = {
       ...INITIAL_FORM_STATE,
+      content: "<p></p>",
       authorName: profile.name || "Sekretariat INKINDO BABEL",
     };
     setFormState(newForm);
     setInitialSnapshot(JSON.stringify(newForm));
     setFormErrors({});
-    setSelectedFile(null);
-    setPreviewUrl(null);
+    coverUpload.clearSelection();
+    pendingCoverUploadRef.current = null;
+    sessionInlineUploadsRef.current.clear();
+    setHasSessionInlineUploads(false);
+    hasUnknownSaveOutcomeRef.current = false;
+    resetFileInput();
     setIsModalOpen(true);
   };
 
   const handleOpenEditModal = (article: NewsArticleItem) => {
     setModalMode("edit");
     setEditingArticle(article);
+
+    const parsed = parseArticleContent(article.content);
+    let resolvedContent = "";
+
+    if (!parsed.isSupported) {
+      setIsContentUnsupported(true);
+      setUnsupportedErrorMessage(parsed.error || "Format konten tidak didukung.");
+      resolvedContent = parsed.body || article.content;
+    } else {
+      setIsContentUnsupported(false);
+      setUnsupportedErrorMessage("");
+      if (parsed.isRichText) {
+        resolvedContent = parsed.body;
+      } else {
+        resolvedContent = convertPlainTextToEditorHtml(parsed.body);
+      }
+    }
 
     const isCustomCat = !DEFAULT_CATEGORIES.includes(article.category);
     const editForm: FormState = {
@@ -220,7 +325,7 @@ export function NewsManagementClient({
       category: isCustomCat ? "__custom__" : article.category,
       customCategory: isCustomCat ? article.category : "",
       excerpt: article.excerpt,
-      content: article.content,
+      content: resolvedContent,
       authorName: article.authorName,
       coverImagePath: article.coverImagePath,
       coverImageAlt: article.coverImageAlt || "",
@@ -230,61 +335,72 @@ export function NewsManagementClient({
     setFormState(editForm);
     setInitialSnapshot(JSON.stringify(editForm));
     setFormErrors({});
-    setSelectedFile(null);
-    setPreviewUrl(article.coverImagePath);
+    coverUpload.clearSelection();
+    pendingCoverUploadRef.current = null;
+    sessionInlineUploadsRef.current.clear();
+    setHasSessionInlineUploads(false);
+    hasUnknownSaveOutcomeRef.current = false;
+    resetFileInput();
     setIsModalOpen(true);
   };
 
   const hasUnsavedChanges = useMemo(() => {
     if (!isModalOpen) return false;
-    if (selectedFile !== null) return true;
+    if (coverUpload.selectedFile !== null) return true;
+    if (hasSessionInlineUploads) return true;
     return JSON.stringify(formState) !== initialSnapshot;
-  }, [isModalOpen, formState, initialSnapshot, selectedFile]);
+  }, [isModalOpen, formState, initialSnapshot, coverUpload.selectedFile, hasSessionInlineUploads]);
 
-  const handleCloseModal = () => {
+  const handleCloseModal = async () => {
+    if (isModalBusy || coverUpload.submitLockRef.current) return;
     if (hasUnsavedChanges) {
       const confirmDiscard = window.confirm(
         "Terdapat perubahan yang belum disimpan pada formulir. Yakin ingin membatalkan dan keluar?"
       );
       if (!confirmDiscard) return;
     }
-    setIsModalOpen(false);
-    setSelectedFile(null);
-    setPreviewUrl(null);
-    setFormErrors({});
+
+    if (!coverUpload.acquireLock()) return;
+    try {
+      await abandonPendingCoverUpload();
+      await abandonDraftInlineUploads();
+      coverUpload.clearSelection();
+      resetFileInput();
+      setIsModalOpen(false);
+      setFormErrors({});
+      setIsContentUnsupported(false);
+      setUnsupportedErrorMessage("");
+    } finally {
+      coverUpload.releaseLock();
+    }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 5 * 1024 * 1024) {
-      showNotification("error", "Ukuran gambar melebihi batas maksimum 5 MB.");
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      return;
+    const validationError = coverUpload.selectFile(
+      file,
+      NEWS_COVER_VALIDATION_MESSAGES
+    );
+    if (validationError) {
+      showNotification("error", validationError);
+      resetFileInput();
     }
-
-    const validTypes = ["image/jpeg", "image/png", "image/webp"];
-    if (!validTypes.includes(file.type)) {
-      showNotification("error", "Format berkas harus JPEG, PNG, atau WebP.");
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      return;
-    }
-
-    setSelectedFile(file);
-    const objectUrl = URL.createObjectURL(file);
-    setPreviewUrl(objectUrl);
   };
 
-  const handleRemoveCover = () => {
-    setSelectedFile(null);
-    setPreviewUrl(null);
-    setFormState((prev) => ({
-      ...prev,
-      coverImagePath: null,
-    }));
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
+  const handleRemoveCover = async () => {
+    if (isModalBusy || !coverUpload.acquireLock()) return;
+    try {
+      await abandonPendingCoverUpload();
+      coverUpload.clearSelection();
+      setFormState((prev) => ({
+        ...prev,
+        coverImagePath: null,
+      }));
+      resetFileInput();
+    } finally {
+      coverUpload.releaseLock();
     }
   };
 
@@ -312,8 +428,18 @@ export function NewsManagementClient({
       errors.excerpt = "Ringkasan maksimal 500 karakter.";
     }
 
-    if (!formState.content.trim()) {
-      errors.content = "Isi artikel berita wajib diisi.";
+    if (isContentUnsupported) {
+      errors.content = "Artikel dengan format tidak didukung tidak dapat disimpan.";
+    } else if (formState.content.length > 500000) {
+      errors.content = "Isi artikel berita melebihi batas maksimum 500.000 karakter.";
+    } else {
+      const encoded = encodeArticleContent(formState.content, CONTENT_MARKER_V1_HTML);
+      const meaningfulText = extractPlainText(encoded).trim();
+      if (!meaningfulText) {
+        errors.content = "Isi artikel berita wajib diisi.";
+      } else if (meaningfulText.length < 10) {
+        errors.content = "Isi artikel berita minimal 10 karakter teks.";
+      }
     }
 
     setFormErrors(errors);
@@ -322,97 +448,176 @@ export function NewsManagementClient({
 
   const handleSubmitForm = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (!validateForm()) {
-      showNotification("error", "Periksa kembali isian formulir yang ditandai merah.");
-      return;
-    }
-
-    setIsSubmittingForm(true);
-    let resolvedCoverPath = formState.coverImagePath;
-
-    if (selectedFile) {
-      setIsUploadingImage(true);
-      try {
-        const formData = new FormData();
-        formData.append("file", selectedFile);
-
-        const uploadRes = await fetch("/api/admin/news-upload", {
-          method: "POST",
-          body: formData,
-        });
-
-        const uploadJson = await uploadRes.json();
-        if (!uploadRes.ok || !uploadJson.success) {
-          showNotification("error", uploadJson.error || "Gagal mengunggah berkas gambar.");
-          setIsSubmittingForm(false);
-          setIsUploadingImage(false);
-          return;
-        }
-
-        resolvedCoverPath = uploadJson.data.publicPath;
-      } catch {
-        showNotification("error", "Kegagalan koneksi jaringan saat mengunggah gambar.");
-        setIsSubmittingForm(false);
-        setIsUploadingImage(false);
-        return;
-      } finally {
-        setIsUploadingImage(false);
-      }
-    }
+    if (isCleaningUpCover) return;
 
     const finalCategory =
       formState.category === "__custom__"
         ? formState.customCategory.trim().toUpperCase()
         : formState.category.trim().toUpperCase();
 
-    try {
-      if (modalMode === "create") {
-        const res = await createNewsArticleAction({
-          title: formState.title.trim(),
-          slug: formState.slug.trim() || undefined,
-          category: finalCategory,
-          excerpt: formState.excerpt.trim(),
-          content: formState.content.trim(),
-          authorName: formState.authorName.trim() || profile.name || "Sekretariat INKINDO BABEL",
-          coverImagePath: resolvedCoverPath,
-          coverImageAlt: formState.coverImageAlt.trim() || undefined,
-          isPublished: formState.isPublished,
-        });
+    const finalEncodedContent = encodeArticleContent(
+      formState.content.trim(),
+      CONTENT_MARKER_V1_HTML
+    );
 
-        if (res.success && res.data) {
+    const outcome = await executeDeferredSubmit({
+      lockRef: coverUpload.submitLockRef,
+      selection: coverUpload.selection,
+      persistedImagePath: formState.coverImagePath,
+      pendingUploadToken: pendingCoverUploadRef.current?.uploadToken,
+      validateForm: () => {
+        if (isContentUnsupported) {
+          showNotification("error", "Artikel dengan format tidak didukung tidak dapat disimpan.");
+          return false;
+        }
+        if (!validateForm()) {
+          showNotification("error", "Periksa kembali isian formulir yang ditandai merah.");
+          return false;
+        }
+        return true;
+      },
+      uploadConfig: {
+        endpoint: "/api/admin/news-upload",
+        defaultError: "Gagal mengunggah berkas gambar.",
+        networkError: "Kegagalan koneksi jaringan saat mengunggah gambar.",
+      },
+      onUploadPhaseChange: coverUpload.setIsUploading,
+      onSubmitPhaseChange: coverUpload.setIsSubmitting,
+      onImageUploaded: (publicPath, uploadToken) => {
+        const previousPending = pendingCoverUploadRef.current;
+        if (previousPending && previousPending.publicPath !== publicPath) {
+          void cleanupAbandonedPendingUpload(
+            previousPending,
+            rollbackPendingUploadAction
+          );
+        }
+        setFormState((prev) => ({ ...prev, coverImagePath: publicPath }));
+        coverUpload.clearSelection();
+        resetFileInput();
+        pendingCoverUploadRef.current = createPendingUploadRecord(
+          "news-cover",
+          publicPath,
+          uploadToken
+        );
+      },
+      onSaveAttemptStart: () => {
+        hasUnknownSaveOutcomeRef.current = false;
+        pendingCoverUploadRef.current = resetPendingUploadForRetry(
+          pendingCoverUploadRef.current
+        );
+      },
+      saveRecord: async (resolvedCoverPath, uploadToken) => {
+        const inlineUploads = Array.from(
+          sessionInlineUploadsRef.current.entries()
+        ).map(([publicPath, token]) => ({ publicPath, uploadToken: token }));
+
+        if (modalMode === "create") {
+          const res = await createNewsArticleAction({
+            title: formState.title.trim(),
+            slug: formState.slug.trim() || undefined,
+            category: finalCategory,
+            excerpt: formState.excerpt.trim(),
+            content: finalEncodedContent,
+            authorName:
+              formState.authorName.trim() ||
+              profile.name ||
+              "Sekretariat INKINDO BABEL",
+            coverImagePath: resolvedCoverPath,
+            coverImageAlt: formState.coverImageAlt.trim() || undefined,
+            isPublished: formState.isPublished,
+            uploadToken,
+            inlineUploads,
+          });
+          return {
+            success: res.success,
+            data: res.data,
+            error: res.error,
+            rollbackToken: res.rollbackToken,
+          };
+        }
+        if (modalMode === "edit" && editingArticle) {
+          const res = await updateNewsArticleAction({
+            id: editingArticle.id,
+            title: formState.title.trim(),
+            slug: formState.slug.trim() || undefined,
+            category: finalCategory,
+            excerpt: formState.excerpt.trim(),
+            content: finalEncodedContent,
+            authorName: formState.authorName.trim() || profile.name,
+            coverImagePath: resolvedCoverPath,
+            coverImageAlt: formState.coverImageAlt.trim() || undefined,
+            isPublished: formState.isPublished,
+            uploadToken,
+            inlineUploads,
+          });
+          return {
+            success: res.success,
+            data: res.data,
+            error: res.error,
+            rollbackToken: res.rollbackToken,
+          };
+        }
+        return { success: false, error: "Mode formulir berita tidak valid." };
+      },
+    });
+
+    switch (outcome.status) {
+      case "locked":
+      case "validation_failed":
+        return;
+      case "upload_failed":
+        showNotification("error", outcome.error);
+        return;
+      case "save_failed":
+        pendingCoverUploadRef.current = transitionPendingUploadOutcome(
+          pendingCoverUploadRef.current,
+          "definite_failure",
+          outcome.rollbackToken
+        );
+        showNotification(
+          "error",
+          outcome.error ||
+            (modalMode === "create"
+              ? "Gagal menyimpan artikel berita."
+              : "Gagal memperbarui artikel berita.")
+        );
+        return;
+      case "unexpected_error":
+        if (outcome.saveAttempted) {
+          hasUnknownSaveOutcomeRef.current = true;
+          pendingCoverUploadRef.current = transitionPendingUploadOutcome(
+            pendingCoverUploadRef.current,
+            "unknown"
+          );
+          showNotification(
+            "error",
+            "Terjadi gangguan jaringan saat menyimpan artikel. Periksa daftar berita sebelum mencoba lagi."
+          );
+        } else {
+          showNotification("error", "Terjadi kesalahan internal saat menyimpan artikel.");
+        }
+        return;
+      case "succeeded":
+        sessionInlineUploadsRef.current.clear();
+        setHasSessionInlineUploads(false);
+        hasUnknownSaveOutcomeRef.current = false;
+        pendingCoverUploadRef.current = null;
+        coverUpload.clearSelection();
+        resetFileInput();
+        if (modalMode === "create") {
           showNotification("success", "Berita baru berhasil ditambahkan!");
           setIsModalOpen(false);
           fetchArticlesList(1, searchQuery, categoryFilter, statusFilter);
         } else {
-          showNotification("error", res.error || "Gagal menyimpan artikel berita.");
-        }
-      } else if (modalMode === "edit" && editingArticle) {
-        const res = await updateNewsArticleAction({
-          id: editingArticle.id,
-          title: formState.title.trim(),
-          slug: formState.slug.trim() || undefined,
-          category: finalCategory,
-          excerpt: formState.excerpt.trim(),
-          content: formState.content.trim(),
-          authorName: formState.authorName.trim() || profile.name,
-          coverImagePath: resolvedCoverPath,
-          coverImageAlt: formState.coverImageAlt.trim() || undefined,
-          isPublished: formState.isPublished,
-        });
-
-        if (res.success && res.data) {
           showNotification("success", "Artikel berita berhasil diperbarui!");
           setIsModalOpen(false);
           fetchArticlesList(currentPage, searchQuery, categoryFilter, statusFilter);
-        } else {
-          showNotification("error", res.error || "Gagal memperbarui artikel berita.");
         }
+        return;
+      default: {
+        const exhaustive: never = outcome;
+        return exhaustive;
       }
-    } catch {
-      showNotification("error", "Terjadi kesalahan internal saat menyimpan artikel.");
-    } finally {
-      setIsSubmittingForm(false);
     }
   };
 
@@ -910,8 +1115,8 @@ export function NewsManagementClient({
               <button
                 type="button"
                 onClick={handleCloseModal}
-                disabled={isSubmittingForm}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors"
+                disabled={isModalBusy}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 disabled:opacity-50 transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1047,25 +1252,47 @@ export function NewsManagementClient({
               </div>
 
               <div className="space-y-1.5">
-                <label htmlFor="news-content" className="text-xs font-semibold text-slate-200">
-                  Isi Artikel Lengkap <span className="text-red-400">*</span>
-                </label>
-                <textarea
-                  id="news-content"
-                  rows={8}
-                  placeholder="Tuliskan isi naskah berita secara lengkap di sini. Mendukung pemisahan paragraf bertingkat..."
-                  value={formState.content}
-                  onChange={(e) => {
-                    setFormState((prev) => ({ ...prev, content: e.target.value }));
-                    if (formErrors.content) {
-                      setFormErrors((prev) => ({ ...prev, content: "" }));
-                    }
-                  }}
-                  className={`w-full bg-[#0F172A] border ${
-                    formErrors.content ? "border-red-500 ring-1 ring-red-500" : "border-slate-700"
-                  } text-slate-100 text-xs rounded-lg px-3.5 py-2.5 placeholder-slate-500 focus:outline-hidden focus:border-[#D97706] focus:ring-1 focus:ring-[#D97706] transition-colors resize-y leading-relaxed font-sans`}
-                />
-                {formErrors.content && (
+                <div className="flex items-center justify-between">
+                  <label htmlFor="news-content" className="text-xs font-semibold text-slate-200">
+                    Isi Artikel Lengkap <span className="text-red-400">*</span>
+                  </label>
+                  <span className="text-[11px] text-slate-400">
+                    Editor visual (H2, H3, tebal, miring, daftar, kutipan, tautan)
+                  </span>
+                </div>
+
+                {isContentUnsupported ? (
+                  <div className="space-y-2">
+                    <div className="p-3.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-start gap-2.5">
+                      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-400" />
+                      <div className="space-y-1">
+                        <p className="font-semibold text-amber-200">Format Konten Tidak Didukung</p>
+                        <p className="text-[11px] text-amber-300/90 leading-relaxed">
+                          Artikel ini menggunakan format konten yang tidak didukung oleh editor ({unsupportedErrorMessage || "format tidak dikenal"}). Untuk mencegah kerusakan data, formulir penyimpanan dinonaktifkan.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="p-3 bg-slate-900 border border-slate-700 rounded-lg text-slate-400 text-xs font-mono max-h-60 overflow-y-auto whitespace-pre-wrap">
+                      {formState.content}
+                    </div>
+                  </div>
+                ) : (
+                  <RichTextEditor
+                    value={formState.content}
+                    onChange={(html) => {
+                      setFormState((prev) => ({ ...prev, content: html }));
+                      if (formErrors.content) {
+                        setFormErrors((prev) => ({ ...prev, content: "" }));
+                      }
+                    }}
+                    onInlineImageUploaded={handleInlineImageUploaded}
+                    placeholder="Tuliskan naskah artikel berita secara lengkap di sini..."
+                    minHeight="320px"
+                    error={formErrors.content || undefined}
+                  />
+                )}
+
+                {isContentUnsupported && formErrors.content && (
                   <p className="text-[11px] text-red-400 font-medium">{formErrors.content}</p>
                 )}
               </div>
@@ -1111,9 +1338,9 @@ export function NewsManagementClient({
 
                 <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-[#0F172A] border border-slate-700/80 rounded-xl p-3.5">
                   <div className="w-24 h-20 rounded-lg bg-slate-800 border border-slate-700 overflow-hidden relative shrink-0 flex items-center justify-center">
-                    {previewUrl ? (
+                    {(coverUpload.previewUrl || formState.coverImagePath) ? (
                       <Image
-                        src={previewUrl}
+                        src={coverUpload.previewUrl || formState.coverImagePath || ""}
                         alt="Preview Sampul"
                         fill
                         className="object-cover"
@@ -1130,6 +1357,7 @@ export function NewsManagementClient({
                         ref={fileInputRef}
                         type="file"
                         accept="image/jpeg,image/png,image/webp"
+                        disabled={isModalBusy}
                         onChange={handleFileChange}
                         className="hidden"
                         id="news-file-input"
@@ -1139,14 +1367,15 @@ export function NewsManagementClient({
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 cursor-pointer transition-colors"
                       >
                         <Upload className="w-3.5 h-3.5 text-amber-400" />
-                        <span>{previewUrl ? "Ganti Gambar" : "Pilih Gambar"}</span>
+                        <span>{(coverUpload.previewUrl || formState.coverImagePath) ? "Ganti Gambar" : "Pilih Gambar"}</span>
                       </label>
 
-                      {previewUrl && (
+                      {(coverUpload.previewUrl || formState.coverImagePath) && (
                         <button
                           type="button"
+                          disabled={isModalBusy}
                           onClick={handleRemoveCover}
-                          className="px-2.5 py-1.5 rounded-lg text-xs font-medium text-red-400 hover:text-red-300 hover:bg-red-950/40 border border-red-900/60 transition-colors"
+                          className="px-2.5 py-1.5 rounded-lg text-xs font-medium text-red-400 hover:text-red-300 hover:bg-red-950/40 disabled:opacity-50 border border-red-900/60 transition-colors"
                         >
                           Hapus Gambar
                         </button>
@@ -1184,20 +1413,20 @@ export function NewsManagementClient({
                 <button
                   type="button"
                   onClick={handleCloseModal}
-                  disabled={isSubmittingForm}
-                  className="px-4 py-2 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors"
+                  disabled={isModalBusy}
+                  className="px-4 py-2 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 border border-slate-700 transition-colors"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmittingForm || isUploadingImage}
+                  disabled={isModalBusy || isContentUnsupported}
                   className="inline-flex items-center gap-2 px-5 py-2 text-xs font-semibold rounded-lg bg-[#D97706] hover:bg-[#B45309] text-white shadow-xs transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {isSubmittingForm ? (
+                  {coverUpload.isBusy ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>{isUploadingImage ? "Mengunggah Gambar..." : "Menyimpan Artikel..."}</span>
+                      <span>{coverUpload.isUploading ? "Mengunggah Gambar..." : "Menyimpan Artikel..."}</span>
                     </>
                   ) : (
                     <>

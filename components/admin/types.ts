@@ -46,6 +46,44 @@ export interface AdminNavSection {
   items: AdminNavItem[];
 }
 
+export interface DashboardOverviewData {
+  hero: {
+    total: number;
+    active: number;
+    inactive: number;
+  };
+  news: {
+    total: number;
+    published: number;
+    draft: number;
+  };
+  memberWorks: {
+    total: number;
+    active: number;
+    inactive: number;
+    featured: number;
+  };
+  partners: {
+    total: number;
+    active: number;
+    inactive: number;
+  };
+  settings: {
+    totalGroups: number;
+    groups: string[];
+  };
+  admins?: {
+    total: number;
+    active: number;
+    inactive: number;
+    roles: {
+      superAdmin: number;
+      admin: number;
+      editor: number;
+    };
+  } | null;
+}
+
 /**
  * Rancangan navigasi pengelolaan website INKINDO BABEL
  * Terstruktur secara fungsional dalam bahasa Indonesia.

@@ -5,12 +5,32 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentAdmin, type AuthenticatedAdmin } from "@/lib/auth/server";
 import { deleteNewsImageFile } from "@/lib/storage/news";
+import {
+  CONTENT_MARKER_V1_HTML,
+  encodeArticleContent,
+  parseArticleContent,
+  extractPlainText,
+  stripHtmlTags,
+  sanitizeNewsHtml,
+  isValidNewsCoverImagePath,
+  isNewsCoverImageReferenced,
+} from "@/lib/security";
+import {
+  runLockedUploadCommit,
+  safeDeleteUnreferencedImage,
+} from "./action-upload-guard";
+import {
+  cleanupArticleInlineImagesOnDelete,
+  cleanupUnusedInlineImagesPostSave,
+  type SessionInlineUploadItem,
+} from "./news-inline-cleanup";
 
 export interface ActionResult<T = unknown> {
   success: boolean;
   message?: string;
   error?: string;
   data?: T;
+  rollbackToken?: string;
 }
 
 export interface NewsArticleItem {
@@ -55,6 +75,8 @@ export interface CreateNewsArticleInput {
   authorName?: string;
   slug?: string;
   coverImagePath?: string | null;
+  uploadToken?: string;
+  inlineUploads?: readonly SessionInlineUploadItem[];
   coverImageAlt?: string | null;
   readTime?: string | null;
   isPublished?: boolean;
@@ -70,6 +92,8 @@ export interface UpdateNewsArticleInput {
   authorName?: string;
   slug?: string;
   coverImagePath?: string | null;
+  uploadToken?: string;
+  inlineUploads?: readonly SessionInlineUploadItem[];
   coverImageAlt?: string | null;
   readTime?: string | null;
   isPublished?: boolean;
@@ -127,16 +151,20 @@ async function resolveUniqueSlug(baseSlug: string, excludeId?: string): Promise<
 }
 
 function isValidNewsImagePath(imagePath: string): boolean {
-  if (!imagePath || typeof imagePath !== "string") return false;
-  if (imagePath.includes("..")) return false;
-  const clean = imagePath.trim();
-  return clean.startsWith("/uploads/news/") || clean.startsWith("uploads/news/");
+  return isValidNewsCoverImagePath(imagePath);
 }
 
-function calculateReadTime(content: string): string {
-  const words = content.trim().split(/\s+/).filter(Boolean).length;
-  const minutes = Math.max(1, Math.ceil(words / 200));
-  return `${minutes} menit baca`;
+function calculateReadTime(text: string): string {
+  try {
+    const plain = extractPlainText(text);
+    const words = plain.trim().split(/\s+/).filter(Boolean).length;
+    const minutes = Math.max(1, Math.ceil(words / 200));
+    return `${minutes} menit baca`;
+  } catch {
+    const words = text.trim().split(/\s+/).filter(Boolean).length;
+    const minutes = Math.max(1, Math.ceil(words / 200));
+    return `${minutes} menit baca`;
+  }
 }
 
 function safeRevalidate() {
@@ -231,125 +259,244 @@ export async function createNewsArticleAction(
   input: CreateNewsArticleInput
 ): Promise<ActionResult<NewsArticleItem>> {
   try {
-    await verifyActiveAdmin();
+    const admin = await verifyActiveAdmin();
+    const rawCoverCandidate = sanitizeInput(input.coverImagePath);
+    const candidateCoverPath = rawCoverCandidate
+      ? rawCoverCandidate.startsWith("/")
+        ? rawCoverCandidate
+        : `/${rawCoverCandidate}`
+      : null;
 
-    const title = sanitizeInput(input.title);
-    if (!title || title.length < 3) {
-      return { success: false, error: "Judul berita wajib diisi minimal 3 karakter." };
-    }
-    if (title.length > 200) {
-      return { success: false, error: "Judul berita maksimal 200 karakter." };
-    }
-
-    const category = sanitizeInput(input.category);
-    if (!category || category.length < 2) {
-      return { success: false, error: "Kategori berita wajib dipilih atau diisi." };
-    }
-    if (category.length > 100) {
-      return { success: false, error: "Kategori berita maksimal 100 karakter." };
-    }
-
-    const excerpt = sanitizeInput(input.excerpt);
-    if (!excerpt || excerpt.length < 5) {
-      return { success: false, error: "Ringkasan berita wajib diisi minimal 5 karakter." };
-    }
-    if (excerpt.length > 500) {
-      return { success: false, error: "Ringkasan berita maksimal 500 karakter." };
-    }
-
-    const content = sanitizeInput(input.content);
-    if (!content || content.length < 10) {
-      return { success: false, error: "Konten berita wajib diisi minimal 10 karakter." };
-    }
-
-    const authorName = sanitizeInput(input.authorName) || "Sekretariat INKINDO BABEL";
-    if (authorName.length > 150) {
-      return { success: false, error: "Nama penulis maksimal 150 karakter." };
-    }
-
-    let finalSlug: string;
-    const customSlug = sanitizeInput(input.slug);
-    if (customSlug) {
-      finalSlug = slugify(customSlug);
-      const exists = await prisma.newsArticle.findUnique({
-        where: { slug: finalSlug },
-        select: { id: true },
-      });
-      if (exists) {
-        return { success: false, error: "Slug berita sudah digunakan. Silakan gunakan slug lain." };
-      }
-    } else {
-      finalSlug = await resolveUniqueSlug(slugify(title));
-    }
-
-    let coverImagePath: string | null = null;
-    if (input.coverImagePath) {
-      const rawCover = sanitizeInput(input.coverImagePath);
-      if (rawCover) {
-        if (!isValidNewsImagePath(rawCover)) {
-          return { success: false, error: "Jalur gambar sampul tidak valid. Gunakan gambar dari direktori /uploads/news/." };
+    return await runLockedUploadCommit<NewsArticleItem>({
+      adminId: admin.id,
+      module: "news-cover",
+      publicPath: candidateCoverPath,
+      uploadToken: input.uploadToken,
+      fallbackError: "Gagal membuat artikel berita.",
+      uniqueConstraintError:
+        "Slug berita sudah digunakan. Silakan gunakan slug lain.",
+      operation: async () => {
+        const title = sanitizeInput(input.title);
+        if (!title || title.length < 3) {
+          return {
+            success: false,
+            definiteFailure: true,
+            error: "Judul berita wajib diisi minimal 3 karakter.",
+          };
         }
-        coverImagePath = rawCover.startsWith("/") ? rawCover : `/${rawCover}`;
-      }
-    }
+        if (title.length > 200) {
+          return {
+            success: false,
+            definiteFailure: true,
+            error: "Judul berita maksimal 200 karakter.",
+          };
+        }
 
-    const coverImageAlt = sanitizeInput(input.coverImageAlt) || title;
-    const readTime = sanitizeInput(input.readTime) || calculateReadTime(content);
+        const category = sanitizeInput(input.category);
+        if (!category || category.length < 2) {
+          return {
+            success: false,
+            definiteFailure: true,
+            error: "Kategori berita wajib dipilih atau diisi.",
+          };
+        }
+        if (category.length > 100) {
+          return {
+            success: false,
+            definiteFailure: true,
+            error: "Kategori berita maksimal 100 karakter.",
+          };
+        }
 
-    const isPublished = Boolean(input.isPublished);
-    let publishedAt: Date | null = null;
-    if (isPublished) {
-      if (input.publishedAt) {
-        const parsed = new Date(input.publishedAt);
-        publishedAt = isNaN(parsed.getTime()) ? new Date() : parsed;
-      } else {
-        publishedAt = new Date();
-      }
-    }
+        const excerpt = sanitizeInput(input.excerpt);
+        if (!excerpt || excerpt.length < 5) {
+          return {
+            success: false,
+            definiteFailure: true,
+            error: "Ringkasan berita wajib diisi minimal 5 karakter.",
+          };
+        }
+        if (excerpt.length > 500) {
+          return {
+            success: false,
+            definiteFailure: true,
+            error: "Ringkasan berita maksimal 500 karakter.",
+          };
+        }
 
-    const created = await prisma.newsArticle.create({
-      data: {
-        title,
-        slug: finalSlug,
-        category,
-        excerpt,
-        content,
-        authorName,
-        coverImagePath,
-        coverImageAlt,
-        readTime,
-        isPublished,
-        publishedAt,
+        if (typeof input.content !== "string") {
+          return {
+            success: false,
+            definiteFailure: true,
+            error: "Isi artikel berita wajib diisi.",
+          };
+        }
+        if (input.content.length > 500000) {
+          return {
+            success: false,
+            definiteFailure: true,
+            error: "Isi artikel melebihi batas maksimum 500.000 karakter.",
+          };
+        }
+
+        const parsedContent = parseArticleContent(input.content);
+        if (parsedContent.isRichText && !parsedContent.isSupported) {
+          return {
+            success: false,
+            definiteFailure: true,
+            error:
+              parsedContent.error ||
+              `Format konten tidak didukung: v${parsedContent.version}:${parsedContent.formatIdentifier || "unknown"}.`,
+          };
+        }
+
+        let finalContent: string;
+        let meaningfulText: string;
+
+        if (parsedContent.isRichText && parsedContent.format === "html") {
+          const cleanHtml = sanitizeNewsHtml(parsedContent.body);
+          meaningfulText = stripHtmlTags(cleanHtml);
+          if (!meaningfulText) {
+            return {
+              success: false,
+              definiteFailure: true,
+              error: "Isi artikel berita wajib diisi.",
+            };
+          }
+          if (meaningfulText.length < 10) {
+            return {
+              success: false,
+              definiteFailure: true,
+              error: "Isi artikel berita minimal 10 karakter teks.",
+            };
+          }
+          finalContent = encodeArticleContent(cleanHtml, CONTENT_MARKER_V1_HTML);
+        } else {
+          meaningfulText = stripHtmlTags(input.content);
+          if (!meaningfulText) {
+            return {
+              success: false,
+              definiteFailure: true,
+              error: "Isi artikel berita wajib diisi.",
+            };
+          }
+          if (meaningfulText.length < 10) {
+            return {
+              success: false,
+              definiteFailure: true,
+              error: "Isi artikel berita minimal 10 karakter teks.",
+            };
+          }
+          finalContent = input.content.trim();
+        }
+
+        const authorName =
+          sanitizeInput(input.authorName) || "Sekretariat INKINDO BABEL";
+        if (authorName.length > 150) {
+          return {
+            success: false,
+            definiteFailure: true,
+            error: "Nama penulis maksimal 150 karakter.",
+          };
+        }
+
+        let finalSlug: string;
+        const customSlug = sanitizeInput(input.slug);
+        if (customSlug) {
+          finalSlug = slugify(customSlug);
+          const exists = await prisma.newsArticle.findUnique({
+            where: { slug: finalSlug },
+            select: { id: true },
+          });
+          if (exists) {
+            return {
+              success: false,
+              definiteFailure: true,
+              error: "Slug berita sudah digunakan. Silakan gunakan slug lain.",
+            };
+          }
+        } else {
+          finalSlug = await resolveUniqueSlug(slugify(title));
+        }
+
+        let coverImagePath: string | null = null;
+        if (rawCoverCandidate) {
+          if (!isValidNewsImagePath(rawCoverCandidate)) {
+            return {
+              success: false,
+              definiteFailure: true,
+              error:
+                "Jalur gambar sampul tidak valid. Gunakan gambar dari direktori /uploads/news/.",
+            };
+          }
+          coverImagePath = candidateCoverPath;
+        }
+
+        const coverImageAlt = sanitizeInput(input.coverImageAlt) || title;
+        const readTime =
+          sanitizeInput(input.readTime) || calculateReadTime(meaningfulText);
+
+        const isPublished = Boolean(input.isPublished);
+        let publishedAt: Date | null = null;
+        if (isPublished) {
+          if (input.publishedAt) {
+            const parsed = new Date(input.publishedAt);
+            publishedAt = isNaN(parsed.getTime()) ? new Date() : parsed;
+          } else {
+            publishedAt = new Date();
+          }
+        }
+
+        const created = await prisma.newsArticle.create({
+          data: {
+            title,
+            slug: finalSlug,
+            category,
+            excerpt,
+            content: finalContent,
+            authorName,
+            coverImagePath,
+            coverImageAlt,
+            readTime,
+            isPublished,
+            publishedAt,
+          },
+        });
+
+        await cleanupUnusedInlineImagesPostSave({
+          newHtml: finalContent,
+          sessionUploads: input.inlineUploads,
+          prisma,
+        });
+
+        safeRevalidate();
+
+        return {
+          success: true,
+          message: "Artikel berita berhasil dibuat.",
+          data: {
+            id: created.id,
+            title: created.title,
+            slug: created.slug,
+            category: created.category,
+            excerpt: created.excerpt,
+            content: created.content,
+            coverImagePath: created.coverImagePath,
+            coverImageAlt: created.coverImageAlt,
+            authorName: created.authorName,
+            readTime: created.readTime,
+            isPublished: created.isPublished,
+            publishedAt: created.publishedAt
+              ? created.publishedAt.toISOString()
+              : null,
+            views: created.views,
+            createdAt: created.createdAt.toISOString(),
+            updatedAt: created.updatedAt.toISOString(),
+          },
+        };
       },
     });
-
-    safeRevalidate();
-
-    return {
-      success: true,
-      message: "Artikel berita berhasil dibuat.",
-      data: {
-        id: created.id,
-        title: created.title,
-        slug: created.slug,
-        category: created.category,
-        excerpt: created.excerpt,
-        content: created.content,
-        coverImagePath: created.coverImagePath,
-        coverImageAlt: created.coverImageAlt,
-        authorName: created.authorName,
-        readTime: created.readTime,
-        isPublished: created.isPublished,
-        publishedAt: created.publishedAt ? created.publishedAt.toISOString() : null,
-        views: created.views,
-        createdAt: created.createdAt.toISOString(),
-        updatedAt: created.updatedAt.toISOString(),
-      },
-    };
   } catch (err) {
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-      return { success: false, error: "Slug berita sudah digunakan. Silakan gunakan slug lain." };
-    }
     return {
       success: false,
       error: err instanceof Error ? err.message : "Gagal membuat artikel berita.",
@@ -361,180 +508,336 @@ export async function updateNewsArticleAction(
   input: UpdateNewsArticleInput
 ): Promise<ActionResult<NewsArticleItem>> {
   try {
-    await verifyActiveAdmin();
-
-    const id = sanitizeInput(input.id);
-    if (!id) {
-      return { success: false, error: "ID artikel berita tidak valid." };
-    }
-
-    const existing = await prisma.newsArticle.findUnique({ where: { id } });
-    if (!existing) {
-      return { success: false, error: "Artikel berita tidak ditemukan." };
-    }
-
-    const updateData: Prisma.NewsArticleUpdateInput = {};
-
-    if (input.title !== undefined) {
-      const title = sanitizeInput(input.title);
-      if (!title || title.length < 3) {
-        return { success: false, error: "Judul berita wajib diisi minimal 3 karakter." };
-      }
-      if (title.length > 200) {
-        return { success: false, error: "Judul berita maksimal 200 karakter." };
-      }
-      updateData.title = title;
-    }
-
-    if (input.category !== undefined) {
-      const category = sanitizeInput(input.category);
-      if (!category || category.length < 2) {
-        return { success: false, error: "Kategori berita wajib dipilih atau diisi." };
-      }
-      if (category.length > 100) {
-        return { success: false, error: "Kategori berita maksimal 100 karakter." };
-      }
-      updateData.category = category;
-    }
-
-    if (input.excerpt !== undefined) {
-      const excerpt = sanitizeInput(input.excerpt);
-      if (!excerpt || excerpt.length < 5) {
-        return { success: false, error: "Ringkasan berita wajib diisi minimal 5 karakter." };
-      }
-      if (excerpt.length > 500) {
-        return { success: false, error: "Ringkasan berita maksimal 500 karakter." };
-      }
-      updateData.excerpt = excerpt;
-    }
-
-    if (input.content !== undefined) {
-      const content = sanitizeInput(input.content);
-      if (!content || content.length < 10) {
-        return { success: false, error: "Konten berita wajib diisi minimal 10 karakter." };
-      }
-      updateData.content = content;
-      if (input.readTime === undefined) {
-        updateData.readTime = calculateReadTime(content);
-      }
-    }
-
-    if (input.authorName !== undefined) {
-      const authorName = sanitizeInput(input.authorName) || "Sekretariat INKINDO BABEL";
-      if (authorName.length > 150) {
-        return { success: false, error: "Nama penulis maksimal 150 karakter." };
-      }
-      updateData.authorName = authorName;
-    }
-
-    if (input.slug !== undefined) {
-      const requestedSlug = slugify(sanitizeInput(input.slug));
-      if (!requestedSlug) {
-        return { success: false, error: "Slug berita tidak valid." };
-      }
-      if (requestedSlug !== existing.slug) {
-        const slugOwner = await prisma.newsArticle.findFirst({
-          where: { slug: requestedSlug, id: { not: existing.id } },
-          select: { id: true },
-        });
-        if (slugOwner) {
-          return { success: false, error: "Slug berita sudah digunakan oleh artikel lain." };
-        }
-        updateData.slug = requestedSlug;
-      }
-    }
+    const admin = await verifyActiveAdmin();
+    const rawCoverCandidate =
+      input.coverImagePath !== undefined && input.coverImagePath !== null
+        ? sanitizeInput(input.coverImagePath)
+        : "";
+    const candidateCoverPath = rawCoverCandidate
+      ? rawCoverCandidate.startsWith("/")
+        ? rawCoverCandidate
+        : `/${rawCoverCandidate}`
+      : null;
 
     let oldImageToDelete: string | null = null;
-    if (input.coverImagePath !== undefined) {
-      if (input.coverImagePath === null || input.coverImagePath === "") {
-        if (existing.coverImagePath) {
-          oldImageToDelete = existing.coverImagePath;
+    let existingContent: string | null = null;
+
+    const result = await runLockedUploadCommit<NewsArticleItem>({
+      adminId: admin.id,
+      module: "news-cover",
+      publicPath: candidateCoverPath,
+      uploadToken: input.uploadToken,
+      fallbackError: "Gagal memperbarui artikel berita.",
+      uniqueConstraintError: "Slug berita sudah digunakan oleh artikel lain.",
+      operation: async () => {
+        const id = sanitizeInput(input.id);
+        if (!id) {
+          return {
+            success: false,
+            definiteFailure: true,
+            error: "ID artikel berita tidak valid.",
+          };
         }
-        updateData.coverImagePath = null;
-      } else {
-        const rawCover = sanitizeInput(input.coverImagePath);
-        if (!isValidNewsImagePath(rawCover)) {
-          return { success: false, error: "Jalur gambar sampul tidak valid. Gunakan gambar dari direktori /uploads/news/." };
+
+        const existing = await prisma.newsArticle.findUnique({ where: { id } });
+        if (!existing) {
+          return {
+            success: false,
+            definiteFailure: true,
+            error: "Artikel berita tidak ditemukan.",
+          };
         }
-        const formattedPath = rawCover.startsWith("/") ? rawCover : `/${rawCover}`;
-        if (existing.coverImagePath && existing.coverImagePath !== formattedPath) {
-          oldImageToDelete = existing.coverImagePath;
+        existingContent = existing.content;
+
+        const existingParsed = parseArticleContent(existing.content);
+        if (existingParsed.isRichText && !existingParsed.isSupported) {
+          return {
+            success: false,
+            definiteFailure: true,
+            error:
+              "Artikel ini memiliki format konten yang tidak didukung dan terkunci untuk mencegah kerusakan data.",
+          };
         }
-        updateData.coverImagePath = formattedPath;
-      }
-    }
 
-    if (input.coverImageAlt !== undefined) {
-      updateData.coverImageAlt = sanitizeInput(input.coverImageAlt);
-    }
+        const updateData: Prisma.NewsArticleUpdateInput = {};
 
-    if (input.readTime !== undefined && input.readTime !== null) {
-      updateData.readTime = sanitizeInput(input.readTime);
-    }
-
-    if (input.isPublished !== undefined) {
-      const nextPublished = Boolean(input.isPublished);
-      updateData.isPublished = nextPublished;
-
-      if (nextPublished) {
-        if (input.publishedAt) {
-          const parsed = new Date(input.publishedAt);
-          updateData.publishedAt = isNaN(parsed.getTime()) ? new Date() : parsed;
-        } else if (!existing.publishedAt) {
-          updateData.publishedAt = new Date();
+        if (input.title !== undefined) {
+          const title = sanitizeInput(input.title);
+          if (!title || title.length < 3) {
+            return {
+              success: false,
+              definiteFailure: true,
+              error: "Judul berita wajib diisi minimal 3 karakter.",
+            };
+          }
+          if (title.length > 200) {
+            return {
+              success: false,
+              definiteFailure: true,
+              error: "Judul berita maksimal 200 karakter.",
+            };
+          }
+          updateData.title = title;
         }
-      }
-    } else if (input.publishedAt !== undefined) {
-      if (input.publishedAt) {
-        const parsed = new Date(input.publishedAt);
-        updateData.publishedAt = isNaN(parsed.getTime()) ? existing.publishedAt : parsed;
-      } else {
-        updateData.publishedAt = null;
-      }
-    }
 
-    const updated = await prisma.newsArticle.update({
-      where: { id },
-      data: updateData,
+        if (input.category !== undefined) {
+          const category = sanitizeInput(input.category);
+          if (!category || category.length < 2) {
+            return {
+              success: false,
+              definiteFailure: true,
+              error: "Kategori berita wajib dipilih atau diisi.",
+            };
+          }
+          if (category.length > 100) {
+            return {
+              success: false,
+              definiteFailure: true,
+              error: "Kategori berita maksimal 100 karakter.",
+            };
+          }
+          updateData.category = category;
+        }
+
+        if (input.excerpt !== undefined) {
+          const excerpt = sanitizeInput(input.excerpt);
+          if (!excerpt || excerpt.length < 5) {
+            return {
+              success: false,
+              definiteFailure: true,
+              error: "Ringkasan berita wajib diisi minimal 5 karakter.",
+            };
+          }
+          if (excerpt.length > 500) {
+            return {
+              success: false,
+              definiteFailure: true,
+              error: "Ringkasan berita maksimal 500 karakter.",
+            };
+          }
+          updateData.excerpt = excerpt;
+        }
+
+        if (input.content !== undefined) {
+          if (typeof input.content !== "string") {
+            return {
+              success: false,
+              definiteFailure: true,
+              error: "Isi artikel berita tidak valid.",
+            };
+          }
+          if (input.content.length > 500000) {
+            return {
+              success: false,
+              definiteFailure: true,
+              error: "Isi artikel melebihi batas maksimum 500.000 karakter.",
+            };
+          }
+
+          const parsedInput = parseArticleContent(input.content);
+          if (parsedInput.isRichText && !parsedInput.isSupported) {
+            return {
+              success: false,
+              definiteFailure: true,
+              error:
+                parsedInput.error ||
+                `Format konten tidak didukung: v${parsedInput.version}:${parsedInput.formatIdentifier || "unknown"}.`,
+            };
+          }
+
+          let finalContent: string;
+          let meaningfulText: string;
+
+          if (parsedInput.isRichText && parsedInput.format === "html") {
+            const cleanHtml = sanitizeNewsHtml(parsedInput.body);
+            meaningfulText = stripHtmlTags(cleanHtml);
+            if (!meaningfulText) {
+              return {
+                success: false,
+                definiteFailure: true,
+                error: "Isi artikel berita wajib diisi.",
+              };
+            }
+            if (meaningfulText.length < 10) {
+              return {
+                success: false,
+                definiteFailure: true,
+                error: "Isi artikel berita minimal 10 karakter teks.",
+              };
+            }
+            finalContent = encodeArticleContent(cleanHtml, CONTENT_MARKER_V1_HTML);
+          } else {
+            meaningfulText = stripHtmlTags(input.content);
+            if (!meaningfulText) {
+              return {
+                success: false,
+                definiteFailure: true,
+                error: "Isi artikel berita wajib diisi.",
+              };
+            }
+            if (meaningfulText.length < 10) {
+              return {
+                success: false,
+                definiteFailure: true,
+                error: "Isi artikel berita minimal 10 karakter teks.",
+              };
+            }
+            finalContent = input.content.trim();
+          }
+
+          updateData.content = finalContent;
+          if (input.readTime === undefined) {
+            updateData.readTime = calculateReadTime(meaningfulText);
+          }
+        }
+
+        if (input.authorName !== undefined) {
+          const authorName =
+            sanitizeInput(input.authorName) || "Sekretariat INKINDO BABEL";
+          if (authorName.length > 150) {
+            return {
+              success: false,
+              definiteFailure: true,
+              error: "Nama penulis maksimal 150 karakter.",
+            };
+          }
+          updateData.authorName = authorName;
+        }
+
+        if (input.slug !== undefined) {
+          const requestedSlug = slugify(sanitizeInput(input.slug));
+          if (!requestedSlug) {
+            return {
+              success: false,
+              definiteFailure: true,
+              error: "Slug berita tidak valid.",
+            };
+          }
+          if (requestedSlug !== existing.slug) {
+            const slugOwner = await prisma.newsArticle.findFirst({
+              where: { slug: requestedSlug, id: { not: existing.id } },
+              select: { id: true },
+            });
+            if (slugOwner) {
+              return {
+                success: false,
+                definiteFailure: true,
+                error: "Slug berita sudah digunakan oleh artikel lain.",
+              };
+            }
+            updateData.slug = requestedSlug;
+          }
+        }
+
+        if (input.coverImagePath !== undefined) {
+          if (input.coverImagePath === null || rawCoverCandidate === "") {
+            if (existing.coverImagePath) {
+              oldImageToDelete = existing.coverImagePath;
+            }
+            updateData.coverImagePath = null;
+          } else {
+            if (!isValidNewsImagePath(rawCoverCandidate)) {
+              return {
+                success: false,
+                definiteFailure: true,
+                error:
+                  "Jalur gambar sampul tidak valid. Gunakan gambar dari direktori /uploads/news/.",
+              };
+            }
+            if (existing.coverImagePath && existing.coverImagePath !== candidateCoverPath) {
+              oldImageToDelete = existing.coverImagePath;
+            }
+            updateData.coverImagePath = candidateCoverPath;
+          }
+        }
+
+        if (input.coverImageAlt !== undefined) {
+          updateData.coverImageAlt = sanitizeInput(input.coverImageAlt);
+        }
+
+        if (input.readTime !== undefined && input.readTime !== null) {
+          updateData.readTime = sanitizeInput(input.readTime);
+        }
+
+        if (input.isPublished !== undefined) {
+          const nextPublished = Boolean(input.isPublished);
+          updateData.isPublished = nextPublished;
+
+          if (nextPublished) {
+            if (input.publishedAt) {
+              const parsed = new Date(input.publishedAt);
+              updateData.publishedAt = isNaN(parsed.getTime()) ? new Date() : parsed;
+            } else if (!existing.publishedAt) {
+              updateData.publishedAt = new Date();
+            }
+          }
+        } else if (input.publishedAt !== undefined) {
+          if (input.publishedAt) {
+            const parsed = new Date(input.publishedAt);
+            updateData.publishedAt = isNaN(parsed.getTime())
+              ? existing.publishedAt
+              : parsed;
+          } else {
+            updateData.publishedAt = null;
+          }
+        }
+
+        const updated = await prisma.newsArticle.update({
+          where: { id },
+          data: updateData,
+        });
+
+        return {
+          success: true,
+          message: "Artikel berita berhasil diperbarui.",
+          data: {
+            id: updated.id,
+            title: updated.title,
+            slug: updated.slug,
+            category: updated.category,
+            excerpt: updated.excerpt,
+            content: updated.content,
+            coverImagePath: updated.coverImagePath,
+            coverImageAlt: updated.coverImageAlt,
+            authorName: updated.authorName,
+            readTime: updated.readTime,
+            isPublished: updated.isPublished,
+            publishedAt: updated.publishedAt
+              ? updated.publishedAt.toISOString()
+              : null,
+            views: updated.views,
+            createdAt: updated.createdAt.toISOString(),
+            updatedAt: updated.updatedAt.toISOString(),
+          },
+        };
+      },
     });
 
+    if (!result.success) {
+      return result;
+    }
+
     if (oldImageToDelete) {
-      const isShared = await prisma.newsArticle.findFirst({
-        where: { coverImagePath: oldImageToDelete, id: { not: id } },
-        select: { id: true },
+      await safeDeleteUnreferencedImage({
+        publicPath: oldImageToDelete,
+        isReferenced: (p) => isNewsCoverImageReferenced(p, { prisma }),
+        deleteFile: deleteNewsImageFile,
+        logLabel: "Gagal membersihkan berkas sampul berita lama:",
       });
-      if (!isShared) {
-        await deleteNewsImageFile(oldImageToDelete);
-      }
+    }
+
+    if (result.data) {
+      await cleanupUnusedInlineImagesPostSave({
+        oldHtml: existingContent,
+        newHtml: result.data.content,
+        sessionUploads: input.inlineUploads,
+        prisma,
+      });
     }
 
     safeRevalidate();
-
-    return {
-      success: true,
-      message: "Artikel berita berhasil diperbarui.",
-      data: {
-        id: updated.id,
-        title: updated.title,
-        slug: updated.slug,
-        category: updated.category,
-        excerpt: updated.excerpt,
-        content: updated.content,
-        coverImagePath: updated.coverImagePath,
-        coverImageAlt: updated.coverImageAlt,
-        authorName: updated.authorName,
-        readTime: updated.readTime,
-        isPublished: updated.isPublished,
-        publishedAt: updated.publishedAt ? updated.publishedAt.toISOString() : null,
-        views: updated.views,
-        createdAt: updated.createdAt.toISOString(),
-        updatedAt: updated.updatedAt.toISOString(),
-      },
-    };
+    return result;
   } catch (err) {
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-      return { success: false, error: "Slug berita sudah digunakan oleh artikel lain." };
-    }
     return {
       success: false,
       error: err instanceof Error ? err.message : "Gagal memperbarui artikel berita.",
@@ -553,7 +856,7 @@ export async function deleteNewsArticleAction(articleId: string): Promise<Action
 
     const existing = await prisma.newsArticle.findUnique({
       where: { id },
-      select: { id: true, coverImagePath: true },
+      select: { id: true, coverImagePath: true, content: true },
     });
 
     if (!existing) {
@@ -563,14 +866,15 @@ export async function deleteNewsArticleAction(articleId: string): Promise<Action
     await prisma.newsArticle.delete({ where: { id } });
 
     if (existing.coverImagePath) {
-      const isShared = await prisma.newsArticle.findFirst({
-        where: { coverImagePath: existing.coverImagePath },
-        select: { id: true },
+      await safeDeleteUnreferencedImage({
+        publicPath: existing.coverImagePath,
+        isReferenced: (p) => isNewsCoverImageReferenced(p, { prisma }),
+        deleteFile: deleteNewsImageFile,
+        logLabel: "Gagal membersihkan berkas sampul berita setelah penghapusan record:",
       });
-      if (!isShared) {
-        await deleteNewsImageFile(existing.coverImagePath);
-      }
     }
+
+    await cleanupArticleInlineImagesOnDelete(existing.content, prisma);
 
     safeRevalidate();
 
@@ -600,11 +904,19 @@ export async function toggleNewsPublishAction(
 
     const existing = await prisma.newsArticle.findUnique({
       where: { id },
-      select: { id: true, isPublished: true, publishedAt: true },
+      select: { id: true, isPublished: true, publishedAt: true, content: true },
     });
 
     if (!existing) {
       return { success: false, error: "Artikel berita tidak ditemukan." };
+    }
+
+    const existingParsed = parseArticleContent(existing.content);
+    if (existingParsed.isRichText && !existingParsed.isSupported) {
+      return {
+        success: false,
+        error: "Artikel dengan format konten yang tidak didukung tidak dapat dipublikasikan.",
+      };
     }
 
     const nextPublished = !existing.isPublished;

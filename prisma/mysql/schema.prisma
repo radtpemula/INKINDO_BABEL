@@ -1,0 +1,155 @@
+// prisma/mysql/schema.prisma
+// Reproducible Prisma Schema for INKINDO BABEL on MySQL 8.4 LTS
+// Target Database: inkindo_babel_db (Docker container: inkindo-babel-mysql)
+// Isolated from active SQLite schema (prisma/schema.prisma)
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/@prisma/client-mysql"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL_MYSQL")
+}
+
+// 1. AdminUser - Model administrator untuk autentikasi
+model AdminUser {
+  id           String    @id @default(cuid()) @db.VarChar(191)
+  username     String    @unique @db.VarChar(100)
+  email        String    @unique @db.VarChar(191)
+  passwordHash String    @db.VarChar(255)
+  name         String    @db.VarChar(255)
+  role         String    @default("ADMIN") @db.VarChar(50)
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+// 2. SiteSetting - Pengaturan identitas website, logo, kontak, header & footer
+model SiteSetting {
+  id        String   @id @default(cuid()) @db.VarChar(191)
+  group     String   @db.VarChar(100)
+  key       String   @unique @db.VarChar(191)
+  value     String   @db.MediumText // Mendukung string panjang & JSON config hingga 16 MB
+  label     String   @db.VarChar(255)
+  type      String   @default("text") @db.VarChar(50)
+  updatedAt DateTime @updatedAt
+
+  @@index([group])
+}
+
+// 3. NavigationItem - Menu dan submenu hierarkis
+model NavigationItem {
+  id        String           @id @default(cuid()) @db.VarChar(191)
+  title     String           @db.VarChar(255)
+  path      String           @db.VarChar(500)
+  iconName  String?          @db.VarChar(100)
+  target    String           @default("_self") @db.VarChar(20)
+  sortOrder Int              @default(0)
+  isActive  Boolean          @default(true)
+
+  // Relasi Hierarki (Self-relation untuk submenu)
+  parentId  String?          @db.VarChar(191)
+  parent    NavigationItem?  @relation("NavHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children  NavigationItem[] @relation("NavHierarchy")
+
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  @@index([parentId, sortOrder])
+}
+
+// 4. HomeSection - Kontrol urutan dan visibilitas section beranda
+model HomeSection {
+  id         String   @id @default(cuid()) @db.VarChar(191)
+  key        String   @unique @db.VarChar(191)
+  name       String   @db.VarChar(255)
+  title      String?  @db.VarChar(255)
+  subtitle   String?  @db.VarChar(500)
+  sortOrder  Int      @default(0)
+  isVisible  Boolean  @default(true)
+  customData String?  @db.Text // JSON string untuk payload spesifik section
+  updatedAt  DateTime @updatedAt
+
+  @@index([sortOrder])
+}
+
+// 5. HeroSlide - Slide gambar dan informasi untuk banner utama beranda
+model HeroSlide {
+  id          String   @id @default(cuid()) @db.VarChar(191)
+  title       String   @db.VarChar(255)
+  description String   @db.Text // Deskripsi paragraf banner
+  imagePath   String   @db.VarChar(500)
+  imageAlt    String   @db.VarChar(255)
+  linkUrl     String?  @db.VarChar(500)
+  linkLabel   String?  @db.VarChar(100)
+  order       Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([order, isActive])
+}
+
+// 6. NewsArticle - Model berita dan publikasi organisasi
+model NewsArticle {
+  id             String    @id @default(cuid()) @db.VarChar(191)
+  title          String    @db.VarChar(255)
+  slug           String    @unique @db.VarChar(191)
+  category       String    @db.VarChar(100)
+  excerpt        String    @db.Text // Ringkasan artikel multi-kalimat
+  content        String    @db.MediumText // Konten Rich Text HTML Tiptap (hingga 16 MB)
+  coverImagePath String?   @db.VarChar(500)
+  coverImageAlt  String?   @db.VarChar(255)
+  authorName     String    @default("Sekretariat INKINDO BABEL") @db.VarChar(255)
+  readTime       String?   @db.VarChar(50)
+  isPublished    Boolean   @default(false)
+  publishedAt    DateTime?
+  views          Int       @default(0)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([isPublished, publishedAt])
+  @@index([category, isPublished])
+}
+
+// 7. Partner - Model mitra kerja dan afiliasi strategis organisasi
+model Partner {
+  id         String   @id @default(cuid()) @db.VarChar(191)
+  name       String   @db.VarChar(255)
+  shortName  String   @db.VarChar(100)
+  category   String?  @db.VarChar(100)
+  logoPath   String?  @db.VarChar(500)
+  websiteUrl String?  @db.VarChar(500)
+  order      Int      @default(0)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([order, isActive])
+  @@index([category])
+}
+
+// 8. MemberWork - Model karya dan portofolio proyek anggota
+model MemberWork {
+  id          String   @id @default(cuid()) @db.VarChar(191)
+  title       String   @db.VarChar(255)
+  slug        String   @unique @db.VarChar(191)
+  category    String   @db.VarChar(100)
+  company     String   @db.VarChar(255)
+  year        String   @db.VarChar(20)
+  description String?  @db.Text // Deskripsi detail proyek anggota
+  imagePath   String?  @db.VarChar(500)
+  imageAlt    String?  @db.VarChar(255)
+  client      String?  @db.VarChar(255)
+  order       Int      @default(0)
+  isFeatured  Boolean  @default(true)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isActive, order])
+  @@index([isFeatured, isActive])
+}

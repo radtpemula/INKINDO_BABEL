@@ -15,3 +15,4 @@ export * from "./NewsManagementClient";
 export * from "./SiteSettingsClient";
 export * from "./PartnerManagementClient";
 export * from "./MemberWorkManagementClient";
+export * from "./RichTextEditor";

@@ -4,12 +4,21 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { getCurrentAdmin, type AuthenticatedAdmin } from "@/lib/auth/server";
 import { deleteMemberWorkImageFile } from "@/lib/storage/member-work";
+import {
+  isValidMemberWorkImagePath as validateMemberWorkImagePath,
+  isMemberWorkImageReferenced,
+} from "@/lib/security";
+import {
+  runLockedUploadCommit,
+  safeDeleteUnreferencedImage,
+} from "./action-upload-guard";
 
 export interface ActionResult<T = unknown> {
   success: boolean;
   message?: string;
   error?: string;
   data?: T;
+  rollbackToken?: string;
 }
 
 export interface MemberWorkItem {
@@ -45,6 +54,7 @@ export interface CreateMemberWorkInput {
   year: string;
   description?: string | null;
   imagePath?: string | null;
+  uploadToken?: string;
   imageAlt?: string | null;
   client?: string | null;
   order?: number;
@@ -61,6 +71,7 @@ export interface UpdateMemberWorkInput {
   year?: string;
   description?: string | null;
   imagePath?: string | null;
+  uploadToken?: string;
   imageAlt?: string | null;
   client?: string | null;
   order?: number;
@@ -123,17 +134,7 @@ async function resolveUniqueMemberWorkSlug(
 function isValidMemberWorkImagePath(val: unknown): boolean {
   if (val === null || val === undefined) return true;
   if (typeof val !== "string") return false;
-  const trimmed = val.trim();
-  if (trimmed === "") return true;
-
-  if (trimmed.includes("..") || trimmed.includes("\\")) return false;
-  if (!trimmed.startsWith("/uploads/member-works/") && !trimmed.startsWith("uploads/member-works/")) {
-    return false;
-  }
-
-  const allowedExts = [".jpg", ".jpeg", ".png", ".webp"];
-  const lower = trimmed.toLowerCase();
-  return allowedExts.some((ext) => lower.endsWith(ext));
+  return validateMemberWorkImagePath(val, { optional: true });
 }
 
 function safeRevalidate(slug?: string): void {
@@ -259,104 +260,116 @@ export async function createMemberWorkAction(
   input: CreateMemberWorkInput
 ): Promise<ActionResult<MemberWorkItem>> {
   try {
-    await verifyActiveAdmin();
+    const admin = await verifyActiveAdmin();
+    const candidateImagePath =
+      typeof input.imagePath === "string" ? input.imagePath.trim() || null : null;
 
-    const title = sanitizeInput(input.title);
-    const category = sanitizeInput(input.category);
-    const company = sanitizeInput(input.company);
-    const year = sanitizeInput(input.year);
-    const description = sanitizeInput(input.description) || null;
-    const client = sanitizeInput(input.client) || null;
-    const imageAlt = sanitizeInput(input.imageAlt) || null;
-    const imagePath = typeof input.imagePath === "string" ? input.imagePath.trim() || null : null;
+    return await runLockedUploadCommit<MemberWorkItem>({
+      adminId: admin.id,
+      module: "member-works",
+      publicPath: candidateImagePath,
+      uploadToken: input.uploadToken,
+      fallbackError: "Gagal menambahkan data karya anggota.",
+      operation: async () => {
+        const title = sanitizeInput(input.title);
+        const category = sanitizeInput(input.category);
+        const company = sanitizeInput(input.company);
+        const year = sanitizeInput(input.year);
+        const description = sanitizeInput(input.description) || null;
+        const client = sanitizeInput(input.client) || null;
+        const imageAlt = sanitizeInput(input.imageAlt) || null;
+        const imagePath = candidateImagePath;
 
-    if (!title) {
-      return { success: false, error: "Judul karya anggota wajib diisi." };
-    }
-    if (title.length > 150) {
-      return { success: false, error: "Judul karya maksimal 150 karakter." };
-    }
+        if (!title) {
+          return { success: false, definiteFailure: true, error: "Judul karya anggota wajib diisi." };
+        }
+        if (title.length > 150) {
+          return { success: false, definiteFailure: true, error: "Judul karya maksimal 150 karakter." };
+        }
 
-    if (!category) {
-      return { success: false, error: "Kategori karya wajib diisi." };
-    }
-    if (category.length > 50) {
-      return { success: false, error: "Kategori karya maksimal 50 karakter." };
-    }
+        if (!category) {
+          return { success: false, definiteFailure: true, error: "Kategori karya wajib diisi." };
+        }
+        if (category.length > 50) {
+          return { success: false, definiteFailure: true, error: "Kategori karya maksimal 50 karakter." };
+        }
 
-    if (!company) {
-      return { success: false, error: "Nama perusahaan konsultan wajib diisi." };
-    }
-    if (company.length > 100) {
-      return { success: false, error: "Nama perusahaan maksimal 100 karakter." };
-    }
+        if (!company) {
+          return { success: false, definiteFailure: true, error: "Nama perusahaan konsultan wajib diisi." };
+        }
+        if (company.length > 100) {
+          return { success: false, definiteFailure: true, error: "Nama perusahaan maksimal 100 karakter." };
+        }
 
-    if (!year) {
-      return { success: false, error: "Tahun pengerjaan karya wajib diisi." };
-    }
-    if (year.length > 20) {
-      return { success: false, error: "Tahun maksimal 20 karakter." };
-    }
+        if (!year) {
+          return { success: false, definiteFailure: true, error: "Tahun pengerjaan karya wajib diisi." };
+        }
+        if (year.length > 20) {
+          return { success: false, definiteFailure: true, error: "Tahun maksimal 20 karakter." };
+        }
 
-    if (description && description.length > 1000) {
-      return { success: false, error: "Deskripsi karya maksimal 1000 karakter." };
-    }
+        if (description && description.length > 1000) {
+          return { success: false, definiteFailure: true, error: "Deskripsi karya maksimal 1000 karakter." };
+        }
 
-    if (client && client.length > 100) {
-      return { success: false, error: "Nama pemberi kerja/klien maksimal 100 karakter." };
-    }
+        if (client && client.length > 100) {
+          return { success: false, definiteFailure: true, error: "Nama pemberi kerja/klien maksimal 100 karakter." };
+        }
 
-    if (imageAlt && imageAlt.length > 200) {
-      return { success: false, error: "Teks alternatif gambar maksimal 200 karakter." };
-    }
+        if (imageAlt && imageAlt.length > 200) {
+          return { success: false, definiteFailure: true, error: "Teks alternatif gambar maksimal 200 karakter." };
+        }
 
-    if (imagePath !== null && !isValidMemberWorkImagePath(imagePath)) {
-      return {
-        success: false,
-        error: "Jalur berkas gambar tidak valid. Gunakan gambar dari direktori /uploads/member-works/.",
-      };
-    }
+        if (imagePath !== null && !isValidMemberWorkImagePath(imagePath)) {
+          return {
+            success: false,
+            definiteFailure: true,
+            error: "Jalur berkas gambar tidak valid. Gunakan gambar dari direktori /uploads/member-works/.",
+          };
+        }
 
-    const rawSlug = sanitizeInput(input.slug);
-    const baseSlug = rawSlug ? slugify(rawSlug) : slugify(title);
-    const finalSlug = await resolveUniqueMemberWorkSlug(baseSlug);
+        const rawSlug = sanitizeInput(input.slug);
+        const baseSlug = rawSlug ? slugify(rawSlug) : slugify(title);
+        const finalSlug = await resolveUniqueMemberWorkSlug(baseSlug);
 
-    let order = input.order;
-    if (typeof order !== "number" || isNaN(order) || order < 0) {
-      const maxOrder = await prisma.memberWork.findFirst({
-        orderBy: { order: "desc" },
-        select: { order: true },
-      });
-      order = (maxOrder?.order ?? -1) + 1;
-    }
+        let order = input.order;
+        if (typeof order !== "number" || isNaN(order) || order < 0) {
+          const maxOrder = await prisma.memberWork.findFirst({
+            orderBy: { order: "desc" },
+            select: { order: true },
+          });
+          order = (maxOrder?.order ?? -1) + 1;
+        }
 
-    const isFeatured = input.isFeatured !== undefined ? Boolean(input.isFeatured) : true;
-    const isActive = input.isActive !== undefined ? Boolean(input.isActive) : true;
+        const isFeatured = input.isFeatured !== undefined ? Boolean(input.isFeatured) : true;
+        const isActive = input.isActive !== undefined ? Boolean(input.isActive) : true;
 
-    const created = await prisma.memberWork.create({
-      data: {
-        title,
-        slug: finalSlug,
-        category,
-        company,
-        year,
-        description,
-        client,
-        imagePath,
-        imageAlt: imageAlt || title,
-        order,
-        isFeatured,
-        isActive,
+        const created = await prisma.memberWork.create({
+          data: {
+            title,
+            slug: finalSlug,
+            category,
+            company,
+            year,
+            description,
+            client,
+            imagePath,
+            imageAlt: imageAlt || title,
+            order,
+            isFeatured,
+            isActive,
+          },
+        });
+
+        safeRevalidate(created.slug);
+
+        return {
+          success: true,
+          message: "Data karya anggota berhasil ditambahkan.",
+          data: mapMemberWorkToItem(created),
+        };
       },
     });
-
-    safeRevalidate(created.slug);
-
-    return {
-      success: true,
-      message: "Data karya anggota berhasil ditambahkan.",
-      data: mapMemberWorkToItem(created),
-    };
   } catch (err) {
     return {
       success: false,
@@ -369,173 +382,194 @@ export async function updateMemberWorkAction(
   input: UpdateMemberWorkInput
 ): Promise<ActionResult<MemberWorkItem>> {
   try {
-    await verifyActiveAdmin();
-
-    const id = sanitizeInput(input.id);
-    if (!id) {
-      return { success: false, error: "ID karya anggota tidak valid." };
-    }
-
-    const existing = await prisma.memberWork.findUnique({
-      where: { id },
-    });
-
-    if (!existing) {
-      return { success: false, error: "Data karya anggota tidak ditemukan." };
-    }
-
-    const updateData: {
-      title?: string;
-      slug?: string;
-      category?: string;
-      company?: string;
-      year?: string;
-      description?: string | null;
-      client?: string | null;
-      imagePath?: string | null;
-      imageAlt?: string | null;
-      order?: number;
-      isFeatured?: boolean;
-      isActive?: boolean;
-    } = {};
+    const admin = await verifyActiveAdmin();
+    const candidateImagePath =
+      typeof input.imagePath === "string" ? input.imagePath.trim() || null : null;
 
     let oldImageToDelete: string | null = null;
+    let existingSlug = "";
+    let updatedSlug = "";
+    let updatedId = "";
 
-    if (input.title !== undefined) {
-      const title = sanitizeInput(input.title);
-      if (!title) {
-        return { success: false, error: "Judul karya anggota tidak boleh kosong." };
-      }
-      if (title.length > 150) {
-        return { success: false, error: "Judul karya maksimal 150 karakter." };
-      }
-      updateData.title = title;
-    }
+    const result = await runLockedUploadCommit<MemberWorkItem>({
+      adminId: admin.id,
+      module: "member-works",
+      publicPath: candidateImagePath,
+      uploadToken: input.uploadToken,
+      fallbackError: "Gagal memperbarui data karya anggota.",
+      operation: async () => {
+        const id = sanitizeInput(input.id);
+        if (!id) {
+          return { success: false, definiteFailure: true, error: "ID karya anggota tidak valid." };
+        }
 
-    if (input.slug !== undefined) {
-      const cleanSlug = sanitizeInput(input.slug);
-      if (cleanSlug) {
-        const formattedSlug = slugify(cleanSlug);
-        const resolvedSlug = await resolveUniqueMemberWorkSlug(formattedSlug, id);
-        updateData.slug = resolvedSlug;
-      }
-    }
+        const existing = await prisma.memberWork.findUnique({
+          where: { id },
+        });
 
-    if (input.category !== undefined) {
-      const category = sanitizeInput(input.category);
-      if (!category) {
-        return { success: false, error: "Kategori karya anggota tidak boleh kosong." };
-      }
-      if (category.length > 50) {
-        return { success: false, error: "Kategori karya maksimal 50 karakter." };
-      }
-      updateData.category = category;
-    }
+        if (!existing) {
+          return { success: false, definiteFailure: true, error: "Data karya anggota tidak ditemukan." };
+        }
 
-    if (input.company !== undefined) {
-      const company = sanitizeInput(input.company);
-      if (!company) {
-        return { success: false, error: "Nama perusahaan konsultan tidak boleh kosong." };
-      }
-      if (company.length > 100) {
-        return { success: false, error: "Nama perusahaan maksimal 100 karakter." };
-      }
-      updateData.company = company;
-    }
+        const updateData: {
+          title?: string;
+          slug?: string;
+          category?: string;
+          company?: string;
+          year?: string;
+          description?: string | null;
+          client?: string | null;
+          imagePath?: string | null;
+          imageAlt?: string | null;
+          order?: number;
+          isFeatured?: boolean;
+          isActive?: boolean;
+        } = {};
 
-    if (input.year !== undefined) {
-      const year = sanitizeInput(input.year);
-      if (!year) {
-        return { success: false, error: "Tahun pengerjaan tidak boleh kosong." };
-      }
-      if (year.length > 20) {
-        return { success: false, error: "Tahun maksimal 20 karakter." };
-      }
-      updateData.year = year;
-    }
+        if (input.title !== undefined) {
+          const title = sanitizeInput(input.title);
+          if (!title) {
+            return { success: false, definiteFailure: true, error: "Judul karya anggota tidak boleh kosong." };
+          }
+          if (title.length > 150) {
+            return { success: false, definiteFailure: true, error: "Judul karya maksimal 150 karakter." };
+          }
+          updateData.title = title;
+        }
 
-    if (input.description !== undefined) {
-      const description = sanitizeInput(input.description) || null;
-      if (description && description.length > 1000) {
-        return { success: false, error: "Deskripsi karya maksimal 1000 karakter." };
-      }
-      updateData.description = description;
-    }
+        if (input.slug !== undefined) {
+          const cleanSlug = sanitizeInput(input.slug);
+          if (cleanSlug) {
+            const formattedSlug = slugify(cleanSlug);
+            const resolvedSlug = await resolveUniqueMemberWorkSlug(formattedSlug, id);
+            updateData.slug = resolvedSlug;
+          }
+        }
 
-    if (input.client !== undefined) {
-      const client = sanitizeInput(input.client) || null;
-      if (client && client.length > 100) {
-        return { success: false, error: "Nama pemberi kerja/klien maksimal 100 karakter." };
-      }
-      updateData.client = client;
-    }
+        if (input.category !== undefined) {
+          const category = sanitizeInput(input.category);
+          if (!category) {
+            return { success: false, definiteFailure: true, error: "Kategori karya anggota tidak boleh kosong." };
+          }
+          if (category.length > 50) {
+            return { success: false, definiteFailure: true, error: "Kategori karya maksimal 50 karakter." };
+          }
+          updateData.category = category;
+        }
 
-    if (input.imageAlt !== undefined) {
-      const imageAlt = sanitizeInput(input.imageAlt) || null;
-      if (imageAlt && imageAlt.length > 200) {
-        return { success: false, error: "Teks alternatif gambar maksimal 200 karakter." };
-      }
-      updateData.imageAlt = imageAlt;
-    }
+        if (input.company !== undefined) {
+          const company = sanitizeInput(input.company);
+          if (!company) {
+            return { success: false, definiteFailure: true, error: "Nama perusahaan konsultan tidak boleh kosong." };
+          }
+          if (company.length > 100) {
+            return { success: false, definiteFailure: true, error: "Nama perusahaan maksimal 100 karakter." };
+          }
+          updateData.company = company;
+        }
 
-    if (input.imagePath !== undefined) {
-      const imagePath = typeof input.imagePath === "string" ? input.imagePath.trim() || null : null;
-      if (imagePath !== null && !isValidMemberWorkImagePath(imagePath)) {
+        if (input.year !== undefined) {
+          const year = sanitizeInput(input.year);
+          if (!year) {
+            return { success: false, definiteFailure: true, error: "Tahun pengerjaan tidak boleh kosong." };
+          }
+          if (year.length > 20) {
+            return { success: false, definiteFailure: true, error: "Tahun maksimal 20 karakter." };
+          }
+          updateData.year = year;
+        }
+
+        if (input.description !== undefined) {
+          const description = sanitizeInput(input.description) || null;
+          if (description && description.length > 1000) {
+            return { success: false, definiteFailure: true, error: "Deskripsi karya maksimal 1000 karakter." };
+          }
+          updateData.description = description;
+        }
+
+        if (input.client !== undefined) {
+          const client = sanitizeInput(input.client) || null;
+          if (client && client.length > 100) {
+            return { success: false, definiteFailure: true, error: "Nama pemberi kerja/klien maksimal 100 karakter." };
+          }
+          updateData.client = client;
+        }
+
+        if (input.imageAlt !== undefined) {
+          const imageAlt = sanitizeInput(input.imageAlt) || null;
+          if (imageAlt && imageAlt.length > 200) {
+            return { success: false, definiteFailure: true, error: "Teks alternatif gambar maksimal 200 karakter." };
+          }
+          updateData.imageAlt = imageAlt;
+        }
+
+        if (input.imagePath !== undefined) {
+          const imagePath = candidateImagePath;
+          if (imagePath !== null && !isValidMemberWorkImagePath(imagePath)) {
+            return {
+              success: false,
+              definiteFailure: true,
+              error: "Jalur berkas gambar tidak valid. Gunakan gambar dari direktori /uploads/member-works/.",
+            };
+          }
+          updateData.imagePath = imagePath;
+          if (existing.imagePath && existing.imagePath !== imagePath) {
+            oldImageToDelete = existing.imagePath;
+          }
+        }
+
+        if (input.order !== undefined) {
+          if (typeof input.order !== "number" || isNaN(input.order) || input.order < 0) {
+            return { success: false, definiteFailure: true, error: "Urutan harus berupa angka positif." };
+          }
+          updateData.order = Math.floor(input.order);
+        }
+
+        if (input.isFeatured !== undefined) {
+          updateData.isFeatured = Boolean(input.isFeatured);
+        }
+
+        if (input.isActive !== undefined) {
+          updateData.isActive = Boolean(input.isActive);
+        }
+
+        const updated = await prisma.memberWork.update({
+          where: { id },
+          data: updateData,
+        });
+
+        existingSlug = existing.slug;
+        updatedSlug = updated.slug;
+        updatedId = id;
+
         return {
-          success: false,
-          error: "Jalur berkas gambar tidak valid. Gunakan gambar dari direktori /uploads/member-works/.",
+          success: true,
+          message: "Data karya anggota berhasil diperbarui.",
+          data: mapMemberWorkToItem(updated),
         };
-      }
-      updateData.imagePath = imagePath;
-      if (existing.imagePath && existing.imagePath !== imagePath) {
-        oldImageToDelete = existing.imagePath;
-      }
-    }
-
-    if (input.order !== undefined) {
-      if (typeof input.order !== "number" || isNaN(input.order) || input.order < 0) {
-        return { success: false, error: "Urutan harus berupa angka positif." };
-      }
-      updateData.order = Math.floor(input.order);
-    }
-
-    if (input.isFeatured !== undefined) {
-      updateData.isFeatured = Boolean(input.isFeatured);
-    }
-
-    if (input.isActive !== undefined) {
-      updateData.isActive = Boolean(input.isActive);
-    }
-
-    const updated = await prisma.memberWork.update({
-      where: { id },
-      data: updateData,
+      },
     });
 
+    if (!result.success) {
+      return result;
+    }
+
     if (oldImageToDelete) {
-      try {
-        const isShared = await prisma.memberWork.findFirst({
-          where: { imagePath: oldImageToDelete, id: { not: id } },
-          select: { id: true },
-        });
-        if (!isShared) {
-          await deleteMemberWorkImageFile(oldImageToDelete);
-        }
-      } catch (cleanupErr) {
-        console.error("Gagal membersihkan berkas gambar lama:", cleanupErr);
-      }
+      await safeDeleteUnreferencedImage({
+        publicPath: oldImageToDelete,
+        isReferenced: (p) =>
+          isMemberWorkImageReferenced(p, { prisma, excludeMemberWorkId: updatedId }),
+        deleteFile: deleteMemberWorkImageFile,
+        logLabel: "Gagal membersihkan berkas gambar lama:",
+      });
     }
 
-    safeRevalidate(existing.slug);
-    if (existing.slug !== updated.slug) {
-      safeRevalidate(updated.slug);
+    safeRevalidate(existingSlug);
+    if (existingSlug !== updatedSlug) {
+      safeRevalidate(updatedSlug);
     }
 
-    return {
-      success: true,
-      message: "Data karya anggota berhasil diperbarui.",
-      data: mapMemberWorkToItem(updated),
-    };
+    return result;
   } catch (err) {
     return {
       success: false,
@@ -569,17 +603,12 @@ export async function deleteMemberWorkAction(
     });
 
     if (existing.imagePath) {
-      try {
-        const isShared = await prisma.memberWork.findFirst({
-          where: { imagePath: existing.imagePath },
-          select: { id: true },
-        });
-        if (!isShared) {
-          await deleteMemberWorkImageFile(existing.imagePath);
-        }
-      } catch (cleanupErr) {
-        console.error("Gagal membersihkan berkas gambar setelah penghapusan record:", cleanupErr);
-      }
+      await safeDeleteUnreferencedImage({
+        publicPath: existing.imagePath,
+        isReferenced: (p) => isMemberWorkImageReferenced(p, { prisma }),
+        deleteFile: deleteMemberWorkImageFile,
+        logLabel: "Gagal membersihkan berkas gambar setelah penghapusan record:",
+      });
     }
 
     safeRevalidate(existing.slug);

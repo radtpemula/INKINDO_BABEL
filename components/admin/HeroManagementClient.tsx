@@ -53,6 +53,25 @@ import {
   updateHeroCardsAction,
   restoreHeroCardsDefaultAction,
 } from "@/lib/admin/hero-settings-actions";
+import {
+  executeDeferredSubmit,
+  type ClientImageValidationMessages,
+} from "./deferred-image-upload";
+import { useDeferredImageUpload } from "./use-deferred-image-upload";
+import {
+  cleanupAbandonedPendingUpload,
+  createPendingUploadRecord,
+  resetPendingUploadForRetry,
+  transitionPendingUploadOutcome,
+  type PendingUploadRecord,
+} from "./pending-upload-cleanup";
+import { rollbackPendingUploadAction } from "@/lib/admin/upload-rollback-action";
+
+const HERO_IMAGE_VALIDATION_MESSAGES: ClientImageValidationMessages = {
+  emptyFile: "Ukuran berkas gambar kosong.",
+  oversizeFile: "Ukuran berkas melebihi batas maksimum 5 MB.",
+  invalidType: "Format berkas harus JPEG, PNG, atau WebP.",
+};
 
 interface HeroManagementClientProps {
   profile: AdminProfile;
@@ -93,22 +112,40 @@ export function HeroManagementClient({
 
   const [formImageAlt, setFormImageAlt] = useState("");
   const [currentImagePath, setCurrentImagePath] = useState("");
-  const [selectedSlideFile, setSelectedSlideFile] = useState<File | null>(null);
-  const [previewSlideUrl, setPreviewSlideUrl] = useState<string | null>(null);
+  const slideUpload = useDeferredImageUpload();
+  const pendingSlideUploadRef = useRef<PendingUploadRecord | null>(null);
+  const [isCleaningUpSlide, setIsCleaningUpSlide] = useState(false);
 
   const [deleteConfirmTarget, setDeleteConfirmTarget] = useState<HeroSlideItem | null>(null);
-  const [isUploadingSlide, setIsUploadingSlide] = useState(false);
-  const [isSubmittingSlide, setIsSubmittingSlide] = useState(false);
-
   const slideFileInputRef = useRef<HTMLInputElement | null>(null);
+  const isSlideModalLocked = slideUpload.isBusy || isCleaningUpSlide;
+
+  const resetSlideFileInput = () => {
+    if (slideFileInputRef.current) {
+      slideFileInputRef.current.value = "";
+    }
+  };
+
+  const abandonPendingSlideUpload = async () => {
+    const pending = pendingSlideUploadRef.current;
+    if (!pending) return;
+    pendingSlideUploadRef.current = null;
+    setIsCleaningUpSlide(true);
+    try {
+      await cleanupAbandonedPendingUpload(pending, rollbackPendingUploadAction);
+    } finally {
+      setIsCleaningUpSlide(false);
+    }
+  };
 
   const handleOpenCreateModal = () => {
     setModalMode("create");
     setEditingSlide(null);
     setFormImageAlt("");
     setCurrentImagePath("");
-    setSelectedSlideFile(null);
-    setPreviewSlideUrl(null);
+    slideUpload.clearSelection();
+    pendingSlideUploadRef.current = null;
+    resetSlideFileInput();
     setIsModalOpen(true);
   };
 
@@ -117,119 +154,182 @@ export function HeroManagementClient({
     setEditingSlide(slide);
     setFormImageAlt(slide.imageAlt);
     setCurrentImagePath(slide.imagePath);
-    setSelectedSlideFile(null);
-    setPreviewSlideUrl(null);
+    slideUpload.clearSelection();
+    pendingSlideUploadRef.current = null;
+    resetSlideFileInput();
     setIsModalOpen(true);
+  };
+
+  const handleCloseSlideModal = async () => {
+    if (isSlideModalLocked || !slideUpload.acquireLock()) return;
+    try {
+      await abandonPendingSlideUpload();
+      slideUpload.clearSelection();
+      resetSlideFileInput();
+      setIsModalOpen(false);
+    } finally {
+      slideUpload.releaseLock();
+    }
   };
 
   const handleSlideFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 5 * 1024 * 1024) {
-      showNotification("error", "Ukuran berkas melebihi batas maksimum 5 MB.");
-      return;
+    const validationError = slideUpload.selectFile(
+      file,
+      HERO_IMAGE_VALIDATION_MESSAGES
+    );
+    if (validationError) {
+      showNotification("error", validationError);
+      resetSlideFileInput();
     }
-
-    const validTypes = ["image/jpeg", "image/png", "image/webp"];
-    if (!validTypes.includes(file.type)) {
-      showNotification("error", "Format berkas harus JPEG, PNG, atau WebP.");
-      return;
-    }
-
-    setSelectedSlideFile(file);
-    const objectUrl = URL.createObjectURL(file);
-    setPreviewSlideUrl(objectUrl);
   };
 
   const handleSubmitSlideForm = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (modalMode === "create" && !selectedSlideFile) {
-      showNotification("error", "Pilih berkas gambar terlebih dahulu dari komputer.");
-      return;
-    }
-
-    if (modalMode === "edit" && !selectedSlideFile && !currentImagePath) {
-      showNotification("error", "Berkas gambar belum dipilih.");
-      return;
-    }
-
-    setIsSubmittingSlide(true);
-    let uploadedPath = currentImagePath;
-
-    if (selectedSlideFile) {
-      setIsUploadingSlide(true);
-      try {
-        const formData = new FormData();
-        formData.append("file", selectedSlideFile);
-
-        const uploadRes = await fetch("/api/admin/hero-upload", {
-          method: "POST",
-          body: formData,
-        });
-
-        const uploadJson = await uploadRes.json();
-        if (!uploadRes.ok || !uploadJson.success) {
-          showNotification(
-            "error",
-            uploadJson.error || "Gagal mengunggah berkas gambar ke server."
-          );
-          setIsSubmittingSlide(false);
-          setIsUploadingSlide(false);
-          return;
-        }
-
-        uploadedPath = uploadJson.data.publicPath;
-      } catch {
-        showNotification("error", "Terjadi kegagalan jaringan saat mengunggah gambar.");
-        setIsSubmittingSlide(false);
-        setIsUploadingSlide(false);
-        return;
-      } finally {
-        setIsUploadingSlide(false);
-      }
-    }
+    if (isCleaningUpSlide) return;
 
     const finalAlt = formImageAlt.trim() || "Dokumentasi Hero INKINDO BABEL";
 
-    try {
-      if (modalMode === "create") {
-        const res = await createHeroSlideAction({
-          imagePath: uploadedPath,
-          imageAlt: finalAlt,
-          isActive: true,
-          order: slides.length,
-        });
-
-        if (res.success && res.data) {
-          setSlides((prev) => [...prev, res.data!].sort((a, b) => a.order - b.order));
-          setIsModalOpen(false);
-          showNotification("success", "Slide baru berhasil disimpan dan ditambahkan ke slideshow.");
-        } else {
-          showNotification("error", res.error || "Gagal menyimpan slide baru.");
+    const outcome = await executeDeferredSubmit({
+      lockRef: slideUpload.submitLockRef,
+      selection: slideUpload.selection,
+      persistedImagePath: currentImagePath || null,
+      pendingUploadToken: pendingSlideUploadRef.current?.uploadToken,
+      validateForm: () => {
+        if (modalMode === "create" && !slideUpload.selectedFile && !currentImagePath) {
+          showNotification("error", "Pilih berkas gambar terlebih dahulu dari komputer.");
+          return false;
         }
-      } else if (modalMode === "edit" && editingSlide) {
-        const res = await updateHeroSlideAction({
-          id: editingSlide.id,
-          imagePath: uploadedPath,
-          imageAlt: finalAlt,
-        });
-
-        if (res.success && res.data) {
-          setSlides((prev) =>
-            prev.map((s) => (s.id === editingSlide.id ? res.data! : s)).sort((a, b) => a.order - b.order)
+        if (modalMode === "edit" && !slideUpload.selectedFile && !currentImagePath) {
+          showNotification("error", "Berkas gambar belum dipilih.");
+          return false;
+        }
+        return true;
+      },
+      uploadConfig: {
+        endpoint: "/api/admin/hero-upload",
+        defaultError: "Gagal mengunggah berkas gambar ke server.",
+        networkError: "Terjadi kegagalan jaringan saat mengunggah gambar.",
+      },
+      onUploadPhaseChange: slideUpload.setIsUploading,
+      onSubmitPhaseChange: slideUpload.setIsSubmitting,
+      onImageUploaded: (publicPath, uploadToken) => {
+        const previousPending = pendingSlideUploadRef.current;
+        if (previousPending && previousPending.publicPath !== publicPath) {
+          void cleanupAbandonedPendingUpload(
+            previousPending,
+            rollbackPendingUploadAction
           );
-          setIsModalOpen(false);
-          showNotification("success", "Gambar slide berhasil diperbarui.");
-        } else {
-          showNotification("error", res.error || "Gagal memperbarui slide.");
         }
+        setCurrentImagePath(publicPath);
+        slideUpload.clearSelection();
+        resetSlideFileInput();
+        pendingSlideUploadRef.current = createPendingUploadRecord(
+          "hero",
+          publicPath,
+          uploadToken
+        );
+      },
+      onSaveAttemptStart: () => {
+        pendingSlideUploadRef.current = resetPendingUploadForRetry(
+          pendingSlideUploadRef.current
+        );
+      },
+      saveRecord: async (resolvedImagePath, uploadToken) => {
+        const targetPath = resolvedImagePath ?? "";
+        if (modalMode === "create") {
+          const res = await createHeroSlideAction({
+            imagePath: targetPath,
+            imageAlt: finalAlt,
+            isActive: true,
+            order: slides.length,
+            uploadToken,
+          });
+          return {
+            success: res.success,
+            data: res.data,
+            error: res.error,
+            rollbackToken: res.rollbackToken,
+          };
+        }
+        if (modalMode === "edit" && editingSlide) {
+          const res = await updateHeroSlideAction({
+            id: editingSlide.id,
+            imagePath: targetPath,
+            imageAlt: finalAlt,
+            uploadToken,
+          });
+          return {
+            success: res.success,
+            data: res.data,
+            error: res.error,
+            rollbackToken: res.rollbackToken,
+          };
+        }
+        return { success: false, error: "Mode formulir slide tidak valid." };
+      },
+    });
+
+    switch (outcome.status) {
+      case "locked":
+      case "validation_failed":
+        return;
+      case "upload_failed":
+        showNotification("error", outcome.error);
+        return;
+      case "save_failed":
+        pendingSlideUploadRef.current = transitionPendingUploadOutcome(
+          pendingSlideUploadRef.current,
+          "definite_failure",
+          outcome.rollbackToken
+        );
+        showNotification(
+          "error",
+          outcome.error ||
+            (modalMode === "create"
+              ? "Gagal menyimpan slide baru."
+              : "Gagal memperbarui slide.")
+        );
+        return;
+      case "unexpected_error":
+        if (outcome.saveAttempted) {
+          pendingSlideUploadRef.current = transitionPendingUploadOutcome(
+            pendingSlideUploadRef.current,
+            "unknown"
+          );
+          showNotification(
+            "error",
+            "Terjadi gangguan jaringan saat menyimpan slide. Periksa daftar slide sebelum mencoba lagi."
+          );
+        } else {
+          showNotification("error", "Terjadi kesalahan tidak terduga saat menyimpan slide.");
+        }
+        return;
+      case "succeeded": {
+        const savedSlide = outcome.data;
+        pendingSlideUploadRef.current = null;
+        if (modalMode === "create") {
+          setSlides((prev) => [...prev, savedSlide].sort((a, b) => a.order - b.order));
+          showNotification("success", "Slide baru berhasil disimpan dan ditambahkan ke slideshow.");
+        } else if (editingSlide) {
+          setSlides((prev) =>
+            prev
+              .map((s) => (s.id === editingSlide.id ? savedSlide : s))
+              .sort((a, b) => a.order - b.order)
+          );
+          showNotification("success", "Gambar slide berhasil diperbarui.");
+        }
+        slideUpload.clearSelection();
+        resetSlideFileInput();
+        setIsModalOpen(false);
+        return;
       }
-    } catch {
-      showNotification("error", "Terjadi kesalahan tidak terduga saat menyimpan slide.");
-    } finally {
-      setIsSubmittingSlide(false);
+      default: {
+        const exhaustive: never = outcome;
+        return exhaustive;
+      }
     }
   };
 
@@ -289,105 +389,167 @@ export function HeroManagementClient({
   const [cardImage, setCardImage] = useState<string>(
     safeSettings.cards.cardImagePath || ""
   );
-  const [selectedCardFile, setSelectedCardFile] = useState<File | null>(null);
-  const [previewCardUrl, setPreviewCardUrl] = useState<string | null>(null);
-  const [isUploadingCard, setIsUploadingCard] = useState(false);
+  const [pendingRetryCardPath, setPendingRetryCardPath] = useState<string | null>(
+    null
+  );
+  const cardUpload = useDeferredImageUpload();
+  const pendingCardUploadRef = useRef<PendingUploadRecord | null>(null);
   const [isRestoringCard, setIsRestoringCard] = useState(false);
   const cardFileInputRef = useRef<HTMLInputElement | null>(null);
+  const isCardBusy = cardUpload.isBusy || isRestoringCard;
+
+  const resetCardFileInput = () => {
+    if (cardFileInputRef.current) {
+      cardFileInputRef.current.value = "";
+    }
+  };
 
   const handleCardFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 5 * 1024 * 1024) {
-      showNotification("error", "Ukuran berkas melebihi batas maksimum 5 MB.");
-      return;
+    const validationError = cardUpload.selectFile(
+      file,
+      HERO_IMAGE_VALIDATION_MESSAGES
+    );
+    if (validationError) {
+      showNotification("error", validationError);
+      resetCardFileInput();
     }
-
-    const validTypes = ["image/jpeg", "image/png", "image/webp"];
-    if (!validTypes.includes(file.type)) {
-      showNotification("error", "Format berkas harus JPEG, PNG, atau WebP.");
-      return;
-    }
-
-    setSelectedCardFile(file);
-    const objectUrl = URL.createObjectURL(file);
-    setPreviewCardUrl(objectUrl);
   };
 
   const handleSaveCardImage = async () => {
-    if (!selectedCardFile) {
-      showNotification("error", "Pilih berkas gambar kartu terlebih dahulu untuk disimpan.");
-      return;
-    }
+    if (isRestoringCard) return;
 
-    setIsUploadingCard(true);
+    const outcome = await executeDeferredSubmit({
+      lockRef: cardUpload.submitLockRef,
+      selection: cardUpload.selection,
+      persistedImagePath: pendingRetryCardPath,
+      pendingUploadToken: pendingCardUploadRef.current?.uploadToken,
+      validateForm: () => {
+        if (!cardUpload.selectedFile && !pendingRetryCardPath) {
+          showNotification(
+            "error",
+            "Pilih berkas gambar kartu terlebih dahulu untuk disimpan."
+          );
+          return false;
+        }
+        return true;
+      },
+      uploadConfig: {
+        endpoint: "/api/admin/hero-upload",
+        defaultError: "Gagal mengunggah berkas gambar.",
+        networkError: "Terjadi kegagalan jaringan saat mengunggah gambar kartu.",
+      },
+      onUploadPhaseChange: cardUpload.setIsUploading,
+      onSubmitPhaseChange: cardUpload.setIsSubmitting,
+      onImageUploaded: (publicPath, uploadToken) => {
+        const previousPending = pendingCardUploadRef.current;
+        if (previousPending && previousPending.publicPath !== publicPath) {
+          void cleanupAbandonedPendingUpload(
+            previousPending,
+            rollbackPendingUploadAction
+          );
+        }
+        setPendingRetryCardPath(publicPath);
+        cardUpload.clearSelection();
+        resetCardFileInput();
+        pendingCardUploadRef.current = createPendingUploadRecord(
+          "hero",
+          publicPath,
+          uploadToken
+        );
+      },
+      onSaveAttemptStart: () => {
+        pendingCardUploadRef.current = resetPendingUploadForRetry(
+          pendingCardUploadRef.current
+        );
+      },
+      saveRecord: async (resolvedImagePath, uploadToken) => {
+        const res = await updateHeroCardImageAction({
+          cardImagePath: resolvedImagePath ?? "",
+          uploadToken,
+        });
+        return {
+          success: res.success,
+          data: res.message || "Gambar kartu Hero berhasil diperbarui.",
+          error: res.error,
+          rollbackToken: res.rollbackToken,
+        };
+      },
+    });
 
-    try {
-      const formData = new FormData();
-      formData.append("file", selectedCardFile);
-
-      const uploadRes = await fetch("/api/admin/hero-upload", {
-        method: "POST",
-        body: formData,
-      });
-
-      const uploadData = await uploadRes.json();
-      if (!uploadRes.ok || !uploadData.success) {
-        throw new Error(uploadData.error || "Gagal mengunggah berkas gambar.");
+    switch (outcome.status) {
+      case "locked":
+      case "validation_failed":
+        return;
+      case "upload_failed":
+        showNotification("error", outcome.error);
+        return;
+      case "save_failed":
+        pendingCardUploadRef.current = transitionPendingUploadOutcome(
+          pendingCardUploadRef.current,
+          "definite_failure",
+          outcome.rollbackToken
+        );
+        showNotification("error", outcome.error || "Gagal menyimpan gambar kartu.");
+        return;
+      case "unexpected_error":
+        if (outcome.saveAttempted) {
+          pendingCardUploadRef.current = transitionPendingUploadOutcome(
+            pendingCardUploadRef.current,
+            "unknown"
+          );
+          showNotification(
+            "error",
+            "Terjadi gangguan jaringan saat menyimpan gambar kartu. Muat ulang halaman untuk memastikan status terbaru."
+          );
+        } else {
+          showNotification("error", "Terjadi kesalahan saat menyimpan gambar kartu.");
+        }
+        return;
+      case "succeeded":
+        pendingCardUploadRef.current = null;
+        setPendingRetryCardPath(null);
+        if (outcome.resolvedImagePath) {
+          setCardImage(outcome.resolvedImagePath);
+        }
+        cardUpload.clearSelection();
+        resetCardFileInput();
+        showNotification("success", outcome.data);
+        return;
+      default: {
+        const exhaustive: never = outcome;
+        return exhaustive;
       }
-
-      const uploadedPath: string = uploadData.data.publicPath;
-
-      const actionRes = await updateHeroCardImageAction({
-        cardImagePath: uploadedPath,
-      });
-
-      if (!actionRes.success) {
-        throw new Error(actionRes.error || "Gagal menyimpan gambar kartu.");
-      }
-
-      setCardImage(uploadedPath);
-      setSelectedCardFile(null);
-      if (previewCardUrl) {
-        URL.revokeObjectURL(previewCardUrl);
-        setPreviewCardUrl(null);
-      }
-      if (cardFileInputRef.current) {
-        cardFileInputRef.current.value = "";
-      }
-
-      showNotification("success", actionRes.message || "Gambar kartu Hero berhasil diperbarui.");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Terjadi kesalahan saat menyimpan gambar kartu.";
-      showNotification("error", msg);
-    } finally {
-      setIsUploadingCard(false);
     }
   };
 
   const handleRestoreCardImage = async () => {
+    if (isCardBusy) return;
     if (!confirm("Kembalikan ilustrasi kartu Hero ke tampilan bawaan (vektor skematik teknik CAD)?")) {
       return;
     }
+    if (!cardUpload.acquireLock()) return;
 
     setIsRestoringCard(true);
 
     try {
+      if (pendingCardUploadRef.current) {
+        const pending = pendingCardUploadRef.current;
+        pendingCardUploadRef.current = null;
+        await cleanupAbandonedPendingUpload(pending, rollbackPendingUploadAction);
+      }
+
       const res = await restoreHeroCardImageDefaultAction();
       if (!res.success) {
         throw new Error(res.error || "Gagal memulihkan ilustrasi kartu.");
       }
 
       setCardImage("");
-      setSelectedCardFile(null);
-      if (previewCardUrl) {
-        URL.revokeObjectURL(previewCardUrl);
-        setPreviewCardUrl(null);
-      }
-      if (cardFileInputRef.current) {
-        cardFileInputRef.current.value = "";
-      }
+      setPendingRetryCardPath(null);
+      cardUpload.clearSelection();
+      resetCardFileInput();
 
       showNotification("success", res.message || "Ilustrasi kartu bawaan berhasil dipulihkan.");
     } catch (err) {
@@ -395,6 +557,7 @@ export function HeroManagementClient({
       showNotification("error", msg);
     } finally {
       setIsRestoringCard(false);
+      cardUpload.releaseLock();
     }
   };
 
@@ -1042,9 +1205,9 @@ export function HeroManagementClient({
                     Pratinjau Visual Kartu Saat Ini
                   </span>
                   <div className="relative w-full aspect-16/10 rounded-lg overflow-hidden border border-slate-700 bg-[#0F172A] flex items-center justify-center">
-                    {previewCardUrl || cardImage ? (
+                    {(cardUpload.previewUrl || pendingRetryCardPath || cardImage) ? (
                       <Image
-                        src={previewCardUrl || cardImage}
+                        src={cardUpload.previewUrl || pendingRetryCardPath || cardImage}
                         alt="Pratinjau Gambar Kartu Hero"
                         fill
                         unoptimized
@@ -1062,10 +1225,14 @@ export function HeroManagementClient({
                       </div>
                     )}
                   </div>
-                  {(previewCardUrl || cardImage) && (
+                  {(cardUpload.previewUrl || pendingRetryCardPath || cardImage) && (
                     <div className="text-[11px] text-emerald-400 font-medium flex items-center gap-1.5 pt-1">
                       <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>{previewCardUrl ? "Gambar baru siap disimpan" : "Gambar kustom aktif"}</span>
+                      <span>
+                        {cardUpload.previewUrl || pendingRetryCardPath
+                          ? "Gambar baru siap disimpan"
+                          : "Gambar kustom aktif"}
+                      </span>
                     </div>
                   )}
                 </div>
@@ -1080,20 +1247,22 @@ export function HeroManagementClient({
                       ref={cardFileInputRef}
                       onChange={handleCardFileSelect}
                       accept="image/jpeg,image/png,image/webp"
+                      disabled={isCardBusy}
                       className="hidden"
                     />
                     <div className="flex flex-wrap items-center gap-3">
                       <button
                         type="button"
+                        disabled={isCardBusy}
                         onClick={() => cardFileInputRef.current?.click()}
-                        className="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white text-xs sm:text-sm font-medium px-4 py-2.5 rounded-lg border border-slate-700 transition-colors cursor-pointer"
+                        className="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 hover:text-white text-xs sm:text-sm font-medium px-4 py-2.5 rounded-lg border border-slate-700 transition-colors cursor-pointer"
                       >
                         <Upload className="w-4 h-4 text-amber-400" />
                         <span>Pilih Gambar dari Komputer</span>
                       </button>
-                      {selectedCardFile && (
+                      {cardUpload.selectedFile && (
                         <span className="text-xs text-amber-400 font-medium truncate max-w-[200px] sm:max-w-[280px]">
-                          {selectedCardFile.name}
+                          {cardUpload.selectedFile.name}
                         </span>
                       )}
                     </div>
@@ -1106,10 +1275,13 @@ export function HeroManagementClient({
                     <button
                       type="button"
                       onClick={handleSaveCardImage}
-                      disabled={isUploadingCard || !selectedCardFile}
+                      disabled={
+                        isCardBusy ||
+                        (!cardUpload.selectedFile && !pendingRetryCardPath)
+                      }
                       className="inline-flex items-center gap-2 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs sm:text-sm font-semibold px-4 py-2 rounded-lg transition-all shadow-xs cursor-pointer"
                     >
-                      {isUploadingCard ? (
+                      {cardUpload.isBusy ? (
                         <>
                           <Loader2 className="w-4 h-4 animate-spin" />
                           <span>Menyimpan...</span>
@@ -1125,7 +1297,10 @@ export function HeroManagementClient({
                     <button
                       type="button"
                       onClick={handleRestoreCardImage}
-                      disabled={isRestoringCard || (!cardImage && !previewCardUrl)}
+                      disabled={
+                        isCardBusy ||
+                        (!cardImage && !cardUpload.previewUrl && !pendingRetryCardPath)
+                      }
                       className="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 hover:text-white text-xs sm:text-sm font-medium px-4 py-2 rounded-lg border border-slate-700 transition-colors cursor-pointer"
                     >
                       {isRestoringCard ? (
@@ -1421,8 +1596,9 @@ export function HeroManagementClient({
                 </h3>
                 <button
                   type="button"
-                  onClick={() => setIsModalOpen(false)}
-                  className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                  onClick={handleCloseSlideModal}
+                  disabled={isSlideModalLocked}
+                  className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-50 transition-colors"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -1440,8 +1616,9 @@ export function HeroManagementClient({
                     type="file"
                     ref={slideFileInputRef}
                     accept="image/jpeg,image/png,image/webp"
+                    disabled={isSlideModalLocked}
                     onChange={handleSlideFileChange}
-                    className="w-full text-xs text-slate-300 file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-slate-800 file:text-slate-200 hover:file:bg-slate-700 cursor-pointer bg-[#0F172A] border border-slate-700 rounded-lg p-2"
+                    className="w-full text-xs text-slate-300 file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-slate-800 file:text-slate-200 hover:file:bg-slate-700 cursor-pointer bg-[#0F172A] border border-slate-700 rounded-lg p-2 disabled:opacity-50"
                   />
                   <p className="text-[11px] text-slate-400 mt-1">
                     Format: JPEG, PNG, WebP (Maks. 5 MB). Rasio 16:9 disarankan untuk tampilan background.
@@ -1449,14 +1626,14 @@ export function HeroManagementClient({
                 </div>
 
                 {/* Preview Box */}
-                {(previewSlideUrl || currentImagePath) && (
+                {(slideUpload.previewUrl || currentImagePath) && (
                   <div>
                     <span className="block text-[11px] font-semibold text-slate-300 mb-1.5">
                       Pratinjau Gambar:
                     </span>
                     <div className="relative aspect-video w-full rounded-lg bg-slate-950 border border-slate-700 overflow-hidden">
                       <Image
-                        src={previewSlideUrl || currentImagePath}
+                        src={slideUpload.previewUrl || currentImagePath}
                         alt="Preview"
                         fill
                         className="object-cover"
@@ -1487,17 +1664,18 @@ export function HeroManagementClient({
                 <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-700">
                   <button
                     type="button"
-                    onClick={() => setIsModalOpen(false)}
-                    className="px-4 py-2 rounded-lg text-xs font-semibold text-slate-300 hover:bg-slate-800 transition-colors cursor-pointer"
+                    onClick={handleCloseSlideModal}
+                    disabled={isSlideModalLocked}
+                    className="px-4 py-2 rounded-lg text-xs font-semibold text-slate-300 hover:bg-slate-800 disabled:opacity-50 transition-colors cursor-pointer"
                   >
                     Batal
                   </button>
                   <button
                     type="submit"
-                    disabled={isSubmittingSlide || isUploadingSlide}
+                    disabled={isSlideModalLocked}
                     className="inline-flex items-center gap-2 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-all shadow-xs cursor-pointer"
                   >
-                    {isSubmittingSlide || isUploadingSlide ? (
+                    {isSlideModalLocked ? (
                       <>
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
                         <span>Menyimpan...</span>
